@@ -52,6 +52,7 @@ class ChannelCache
 end
 
 # Processes JSON metadata files created by Downie for offline YouTube video viewing
+# rubocop:disable Metrics/ClassLength
 class DownieJSON
   attr_reader :file
 
@@ -62,24 +63,41 @@ class DownieJSON
   end
 
   def json
-    @json ||= begin
-      result = raw_json.merge(
-        'progress' => progress,
-        'url' => url,
-        'cleanTitle' => clean_title,
-        'channelUrl' => channel_url
-      )
-      result
-    rescue StandardError => e
-      puts "Error processing JSON for #{file}: #{e.message}"
-      raw_json.merge(
-        'progress' => 0,
-        'url' => raw_json['url'],
-        'cleanTitle' => raw_json['title'] || 'Unknown Title',
-        'channelUrl' => nil
-      )
-    end
+    @json ||= build_enhanced_json
   end
+
+  private
+
+  def build_enhanced_json
+    enhanced_json_data
+  rescue StandardError => e
+    handle_json_processing_error(e)
+  end
+
+  def enhanced_json_data
+    raw_json.merge(
+      'progress' => progress,
+      'url' => url,
+      'cleanTitle' => clean_title,
+      'channelUrl' => channel_url
+    )
+  end
+
+  def handle_json_processing_error(error)
+    puts "Error processing JSON for #{file}: #{error.message}"
+    fallback_json_data
+  end
+
+  def fallback_json_data
+    raw_json.merge(
+      'progress' => 0,
+      'url' => raw_json['url'],
+      'cleanTitle' => raw_json['title'] || 'Unknown Title',
+      'channelUrl' => nil
+    )
+  end
+
+  public
 
   def marked_watched
     File.write file, raw_json.merge(
@@ -97,18 +115,27 @@ class DownieJSON
     current_url = raw_json['previewImageURL']
     return false unless current_url&.include?('ytimg.com')
 
-    # If we have a YouTube URL, check if we either have local thumbnails OR can generate one
-    has_local_thumbnail = %w[.jpg .png .webp .mp4.png].any? do |ext|
-      expected_path = if ext == '.mp4.png'
-                        "#{video_path}.png"
-                      else
-                        file.sub(/\.[^.]+$/, ext)
-                      end
-      File.exist? expected_path
-    end
+    local_thumbnail? || can_generate_thumbnail?
+  end
 
-    # Update if we have local thumbnail OR if video exists (so we can generate one)
-    has_local_thumbnail || File.exist?(video_path)
+  def local_thumbnail?
+    thumbnail_extensions.any? { |ext| File.exist?(thumbnail_path_for_extension(ext)) }
+  end
+
+  def can_generate_thumbnail?
+    File.exist?(video_path)
+  end
+
+  def thumbnail_extensions
+    %w[.jpg .png .webp .mp4.png]
+  end
+
+  def thumbnail_path_for_extension(ext)
+    if ext == '.mp4.png'
+      "#{video_path}.png"
+    else
+      file.sub(/\.[^.]+$/, ext)
+    end
   end
 
   def progress
@@ -164,23 +191,25 @@ class DownieJSON
 
   def length_in_seconds
     return raw_json['lengthInSeconds'] if raw_json['lengthInSeconds']
+    return 0 unless File.exist?(video_path)
 
-    video_file = video_path
-    return 0 unless File.exist?(video_file)
-
-    # Try ffprobe first (most reliable)
-    if system('which ffprobe > /dev/null 2>&1')
-      cmd = 'ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1'
-      duration = `#{cmd} "#{video_file}" 2>/dev/null`.chomp
-      return duration.to_f.to_i if duration.match?(/^\d+\.?\d*$/)
-    end
-
-    # Fallback to mdls (legacy)
-    duration = `mdls "#{video_file}" | grep Duration 2>/dev/null`.chomp
-    return duration.split('= ').last.to_i if duration.include?('=')
-
-    0
+    duration_from_ffprobe || duration_from_mdls || 0
   end
+
+  def duration_from_ffprobe
+    return unless system('which ffprobe > /dev/null 2>&1')
+
+    cmd = 'ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1'
+    duration = `#{cmd} "#{video_path}" 2>/dev/null`.chomp
+    duration.to_f.to_i if duration.match?(/^\d+\.?\d*$/)
+  end
+
+  def duration_from_mdls
+    duration = `mdls "#{video_path}" | grep Duration 2>/dev/null`.chomp
+    duration.split('= ').last.to_i if duration.include?('=')
+  end
+
+  public
 
   def raw_json
     JSON.parse file_contents
@@ -305,6 +334,7 @@ class DownieJSON
     url.include?('youtube.com')
   end
 end
+# rubocop:enable Metrics/ClassLength
 
 # Manages collection of YouTube video files with sorting and filtering capabilities
 class YouTubeFiles
@@ -333,20 +363,38 @@ class YouTubeFiles
   private
 
   def filter_files(files)
-    files.select do |video|
-      case @filter
-      when 'unwatched'
-        progress = video.json['progress'] || 0
-        progress.zero? && (video.json['watched'].nil? || video.json['watched'].empty?)
-      when 'partial'
-        progress = video.json['progress'] || 0
-        progress.positive? && progress < 95 && (video.json['watched'].nil? || video.json['watched'].empty?)
-      when 'watched'
-        !video.json['watched'].nil? && !video.json['watched'].empty?
-      else
-        true
-      end
+    files.select { |video| matches_filter?(video) }
+  end
+
+  def matches_filter?(video)
+    case @filter
+    when 'unwatched'
+      unwatched?(video)
+    when 'partial'
+      partially_watched?(video)
+    when 'watched'
+      watched?(video)
+    else
+      true
     end
+  end
+
+  def unwatched?(video)
+    progress = video.json['progress'] || 0
+    progress.zero? && not_marked_watched?(video)
+  end
+
+  def partially_watched?(video)
+    progress = video.json['progress'] || 0
+    progress.positive? && progress < 95 && not_marked_watched?(video)
+  end
+
+  def watched?(video)
+    !video.json['watched'].nil? && !video.json['watched'].empty?
+  end
+
+  def not_marked_watched?(video)
+    video.json['watched'].nil? || video.json['watched'].empty?
   end
 
   def json_files
@@ -470,19 +518,25 @@ post '/check-channel/:channel_name' do
 end
 
 def sync_to_iina_watch_later(file_path, current_time)
-  video_path = file_path.sub('.json', '.mp4')
-  md5_of_file_path = Digest::MD5.hexdigest(video_path)
-  watch_later_path = '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
-  watch_later_file = "#{watch_later_path}/#{md5_of_file_path.upcase}"
-
-  if File.exist?(watch_later_path)
-    File.write(watch_later_file, "start=#{current_time}\n")
-  else
-    FileUtils.mkdir_p(watch_later_path)
-    File.write(watch_later_file, "start=#{current_time}\n") if File.exist?(watch_later_path)
-  end
+  watch_later_file = iina_watch_later_file_path(file_path)
+  ensure_watch_later_directory_exists
+  File.write(watch_later_file, "start=#{current_time}\n")
 rescue StandardError
   # Silently fail if we can't write to IINA files
+end
+
+def iina_watch_later_file_path(file_path)
+  video_path = file_path.sub('.json', '.mp4')
+  md5_hash = Digest::MD5.hexdigest(video_path).upcase
+  "#{iina_watch_later_directory}/#{md5_hash}"
+end
+
+def iina_watch_later_directory
+  '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
+end
+
+def ensure_watch_later_directory_exists
+  FileUtils.mkdir_p(iina_watch_later_directory) unless File.exist?(iina_watch_later_directory)
 end
 
 def update_youtube_url_timestamp(youtube_url, current_time)
@@ -500,22 +554,28 @@ end
 def handle_progress_sync(file_path, params)
   downie_json = DownieJSON.new(file_path)
   raw_json = downie_json.send(:raw_json)
+  current_progress = calculate_current_progress(downie_json, params, file_path)
+  updated_json = build_updated_json(raw_json, current_progress, params)
 
+  File.write(file_path, updated_json.to_json, encoding: 'UTF-8')
+  [current_progress, updated_json, raw_json]
+end
+
+def calculate_current_progress(downie_json, params, file_path)
   if params[:web_progress] && params[:web_time]
-    current_time = params[:web_time].to_i
-    sync_to_iina_watch_later(file_path, current_time)
-    current_progress = params[:web_progress].to_i
+    sync_to_iina_watch_later(file_path, params[:web_time].to_i)
+    params[:web_progress].to_i
   else
-    current_progress = downie_json.send(:progress)
+    downie_json.send(:progress)
   end
+end
 
+def build_updated_json(raw_json, current_progress, params)
   updated_json = raw_json.merge('progress' => current_progress)
   if params[:web_time] && raw_json['url']
     updated_json['url'] = update_youtube_url_timestamp(raw_json['url'], params[:web_time].to_i)
   end
-
-  File.write(file_path, updated_json.to_json, encoding: 'UTF-8')
-  [current_progress, updated_json, raw_json]
+  updated_json
 end
 
 post '/sync-progress' do
