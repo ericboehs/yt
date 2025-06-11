@@ -35,7 +35,7 @@ The app provides a Netflix-style grid interface for browsing your offline video 
 
 2. **Clone and run**:
   ```bash
-  git clone https://github.com/yourusername/yt.git
+  git clone https://github.com/ericboehs/yt.git
   cd yt
   ./yt
   ```
