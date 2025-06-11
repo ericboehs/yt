@@ -3,12 +3,31 @@
 
 set -e
 
+# Check if --fix flag is passed
+if [ "$1" = "--fix" ]; then
+  echo "🔧 Running fixes..."
+  echo
+
+  echo "📝 Fixing file formatting..."
+  npx eclint fix '**/*'
+  echo "✅ eclint fix completed"
+  echo
+
+  echo "🔍 Auto-fixing rubocop violations..."
+  rubocop -A
+  echo "✅ rubocop auto-fix completed"
+  echo
+
+  echo "🎉 All fixes applied!"
+  exit 0
+fi
+
 echo "🚀 Running CI pipeline..."
 echo
 
-echo "📝 Running editorconfig-checker..."
-editorconfig-checker
-echo "✅ editorconfig-checker passed"
+echo "📝 Running eclint check..."
+npx eclint check '**/*'
+echo "✅ eclint check passed"
 echo
 
 echo "🔍 Running rubocop on main code..."
