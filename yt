@@ -146,7 +146,7 @@ class DownieJSON
 
   def start
     md5_of_file_path = Digest::MD5.hexdigest video_path
-    watch_later_path = '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
+    watch_later_path = "#{Dir.home}/Library/Application Support/com.colliderli.iina/watch_later"
     watch_later_file = "#{watch_later_path}/#{md5_of_file_path.upcase}"
     return 0 unless File.exist? watch_later_file
 
@@ -532,7 +532,7 @@ def iina_watch_later_file_path(file_path)
 end
 
 def iina_watch_later_directory
-  '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
+  "#{Dir.home}/Library/Application Support/com.colliderli.iina/watch_later"
 end
 
 def ensure_watch_later_directory_exists
