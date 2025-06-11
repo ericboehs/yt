@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+# rubocop:disable Metrics/MethodLength, Metrics/ClassLength, Metrics/AbcSize
+
 require 'bundler/inline'
 
 gemfile do
@@ -1355,3 +1357,4 @@ end
 
 # Run the tests
 puts 'Running yt application tests with coverage...'
+# rubocop:enable Metrics/MethodLength, Metrics/ClassLength, Metrics/AbcSize
