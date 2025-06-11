@@ -1,7 +1,9 @@
 #! /usr/bin/env ruby
+# frozen_string_literal: true
 
 # Eric's Offline YouTube (Download YT videos via Downie with JSON metadata and image previews and then run this script)
 
+require 'English'
 require 'bundler/inline'
 
 gemfile do
@@ -15,21 +17,23 @@ gemfile do
   gem 'net-http'
 end
 
-DOWNLOAD_PATH = "#{ENV['HOME']}/Downloads/YouTube/".freeze
-CHANNEL_CACHE_FILE = "#{DOWNLOAD_PATH}channel_cache.json".freeze
+DOWNLOAD_PATH = "#{Dir.home}/Downloads/YouTube/"
+CHANNEL_CACHE_FILE = "#{DOWNLOAD_PATH}channel_cache.json"
 END_OF_FILE = DATA.pos.freeze
 
+# Manages caching of YouTube channel URLs to avoid repeated API lookups
 class ChannelCache
   def self.load_cache
     return {} unless File.exist?(CHANNEL_CACHE_FILE)
+
     JSON.parse(File.read(CHANNEL_CACHE_FILE, encoding: 'UTF-8'))
-  rescue
+  rescue StandardError
     {}
   end
 
   def self.save_cache(cache)
     File.write(CHANNEL_CACHE_FILE, cache.to_json, encoding: 'UTF-8')
-  rescue
+  rescue StandardError
     # Silently fail if we can't write
   end
 
@@ -45,6 +49,7 @@ class ChannelCache
   end
 end
 
+# Processes JSON metadata files created by Downie for offline YouTube video viewing
 class DownieJSON
   attr_reader :file
 
@@ -62,7 +67,7 @@ class DownieJSON
         'channelUrl' => channel_url
       )
       result
-    rescue => e
+    rescue StandardError => e
       puts "Error processing JSON for #{file}: #{e.message}"
       raw_json.merge(
         'progress' => 0,
@@ -97,7 +102,10 @@ class DownieJSON
     watch_later_file = "#{watch_later_path}/#{md5_of_file_path.upcase}"
     return 0 unless File.exist? watch_later_file
 
-    File.readlines(watch_later_file).grep(/start=/).first&.chomp&.split('=')&.last.to_i
+    start_line = File.readlines(watch_later_file).grep(/start=/).first
+    return 0 unless start_line
+
+    start_line.chomp.split('=').last.to_i
   end
 
   def update_json
@@ -141,15 +149,14 @@ class DownieJSON
 
     # Try ffprobe first (most reliable)
     if system('which ffprobe > /dev/null 2>&1')
-      duration = `ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "#{video_file}" 2>/dev/null`.chomp
+      cmd = 'ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1'
+      duration = `#{cmd} "#{video_file}" 2>/dev/null`.chomp
       return duration.to_f.to_i if duration.match?(/^\d+\.?\d*$/)
     end
 
     # Fallback to mdls (legacy)
     duration = `mdls "#{video_file}" | grep Duration 2>/dev/null`.chomp
-    if duration.include?('=')
-      return duration.split('= ').last.to_i
-    end
+    return duration.split('= ').last.to_i if duration.include?('=')
 
     0
   end
@@ -171,10 +178,8 @@ class DownieJSON
   def preview_image_url
     # Check for various image formats
     %w[.jpg .png .webp .mp4.png].each do |ext|
-      expected_path = ext == '.mp4.png' ? video_path + '.png' : file.sub(/\.[^.]+$/, ext)
-      if File.exist? expected_path
-        return "/thumbnails/#{ERB::Util.url_encode expected_path.gsub DOWNLOAD_PATH, ''}"
-      end
+      expected_path = ext == '.mp4.png' ? "#{video_path}.png" : file.sub(/\.[^.]+$/, ext)
+      return "/thumbnails/#{ERB::Util.url_encode expected_path.gsub DOWNLOAD_PATH, ''}" if File.exist? expected_path
     end
 
     raw_json['previewImageURL'] || generate_preview_image
@@ -182,7 +187,7 @@ class DownieJSON
 
   def generate_preview_image
     `qlmanage -t "#{video_path}" -s 512 -o "#{DOWNLOAD_PATH}"`
-    file_name = video_path.gsub(DOWNLOAD_PATH, '') + '.png'
+    file_name = "#{video_path.gsub(DOWNLOAD_PATH, '')}.png"
     "/thumbnails/#{ERB::Util.url_encode file_name}"
   end
 
@@ -219,7 +224,7 @@ class DownieJSON
 
   def channel_url
     authors = raw_json['authors'] || []
-    return nil if authors.empty? || !is_youtube_video?
+    return nil if authors.empty? || !youtube_video?
 
     channel_name = authors.first
 
@@ -229,8 +234,7 @@ class DownieJSON
 
     # Return search URL immediately to avoid blocking page load
     # The URL checking can be done lazily when user actually clicks
-    search_url = "https://www.youtube.com/results?search_query=#{ERB::Util.url_encode(channel_name)}&sp=EgIQAg%253D%253D"
-    search_url
+    "https://www.youtube.com/results?search_query=#{ERB::Util.url_encode(channel_name)}&sp=EgIQAg%253D%253D"
   end
 
   def check_and_cache_channel_url(channel_name)
@@ -258,17 +262,18 @@ class DownieJSON
     success = response.code != '404'
     puts "  -> #{response.code} #{success ? 'SUCCESS' : 'FAILED'}"
     success
-  rescue => e
+  rescue StandardError => e
     puts "  -> ERROR: #{e.message}"
     false
   end
 
-  def is_youtube_video?
+  def youtube_video?
     url = raw_json['url'] || ''
     url.include?('youtube.com')
   end
 end
 
+# Manages collection of YouTube video files with sorting and filtering capabilities
 class YouTubeFiles
   def initialize(sort = nil, direction = nil, filter = nil)
     @sort = sort || 'addedAtEpoch'
@@ -277,7 +282,7 @@ class YouTubeFiles
   end
 
   def json
-    downie_files.map { |df| df.json }
+    downie_files.map(&:json)
   end
 
   def downie_files
@@ -299,10 +304,10 @@ class YouTubeFiles
       case @filter
       when 'unwatched'
         progress = video.json['progress'] || 0
-        progress == 0 && (video.json['watched'].nil? || video.json['watched'].empty?)
+        progress.zero? && (video.json['watched'].nil? || video.json['watched'].empty?)
       when 'partial'
         progress = video.json['progress'] || 0
-        progress > 0 && progress < 95 && (video.json['watched'].nil? || video.json['watched'].empty?)
+        progress.positive? && progress < 95 && (video.json['watched'].nil? || video.json['watched'].empty?)
       when 'watched'
         !video.json['watched'].nil? && !video.json['watched'].empty?
       else
@@ -369,7 +374,8 @@ post '/check-channel/:channel_name' do
   channel_name = params[:channel_name]
   downie_json = DownieJSON.new('')
   downie_json.instance_variable_set(:@file, '')
-  downie_json.instance_variable_set(:@raw_json, { 'authors' => [channel_name], 'url' => 'https://youtube.com/watch?v=test' })
+  downie_json.instance_variable_set(:@raw_json,
+                                    { 'authors' => [channel_name], 'url' => 'https://youtube.com/watch?v=test' })
 
   url = downie_json.check_and_cache_channel_url(channel_name)
   { channel_name: channel_name, url: url }.to_json
@@ -390,7 +396,7 @@ def fetch_assets
 end
 
 `which iina`
-unless $?.success?
+unless $CHILD_STATUS.success?
   warn 'IINA not found. Please run `brew install --cask iina` to proceed.'
   exit 1
 end
