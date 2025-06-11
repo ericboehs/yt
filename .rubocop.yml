@@ -1,5 +1,7 @@
 AllCops:
   NewCops: enable
+  Exclude:
+    - 'bin/**/*'
 
 # For single-file applications, longer classes are acceptable
 Metrics/ClassLength:

@@ -55,7 +55,8 @@ class DownieJSON
 
   def initialize(file)
     @file = file
-    update_json unless raw_json['lengthInSeconds']
+    should_update = !raw_json['lengthInSeconds'] || needs_thumbnail_update?
+    update_json if should_update
   end
 
   def json
@@ -89,6 +90,24 @@ class DownieJSON
   end
 
   private
+
+  def needs_thumbnail_update?
+    current_url = raw_json['previewImageURL']
+    return false unless current_url&.include?('ytimg.com')
+
+    # If we have a YouTube URL, check if we either have local thumbnails OR can generate one
+    has_local_thumbnail = %w[.jpg .png .webp .mp4.png].any? do |ext|
+      expected_path = if ext == '.mp4.png'
+                        "#{video_path}.png"
+                      else
+                        file.sub(/\.[^.]+$/, ext)
+                      end
+      File.exist? expected_path
+    end
+
+    # Update if we have local thumbnail OR if video exists (so we can generate one)
+    has_local_thumbnail || File.exist?(video_path)
+  end
 
   def progress
     (start / raw_json['lengthInSeconds'].to_f * 100).to_i
@@ -178,11 +197,19 @@ class DownieJSON
   def preview_image_url
     # Check for various image formats
     %w[.jpg .png .webp .mp4.png].each do |ext|
-      expected_path = ext == '.mp4.png' ? "#{video_path}.png" : file.sub(/\.[^.]+$/, ext)
+      expected_path = if ext == '.mp4.png'
+                        "#{video_path}.png" # video.mp4.png
+                      else
+                        file.sub(/\.[^.]+$/, ext) # video.jpg, video.png, etc.
+                      end
       return "/thumbnails/#{ERB::Util.url_encode expected_path.gsub DOWNLOAD_PATH, ''}" if File.exist? expected_path
     end
 
-    raw_json['previewImageURL'] || generate_preview_image
+    # Try to generate thumbnail from video file if it exists
+    return generate_preview_image if File.exist?(video_path)
+
+    # Fallback to original URL or placeholder
+    raw_json['previewImageURL'] || 'https://via.placeholder.com/480x270?text=No+Thumbnail'
   end
 
   def generate_preview_image
@@ -327,7 +354,26 @@ set :port, 7778
 get '/' do
   DATA.pos = END_OF_FILE
   videos = YouTubeFiles.new params[:sort], params[:dir], params[:filter]
-  ERB.new(DATA.read).result binding
+
+  # Auto-fix any YouTube thumbnail URLs on page load
+  videos.downie_files.each do |downie_file|
+    next unless downie_file.send(:raw_json)['previewImageURL']&.include?('ytimg.com') &&
+                File.exist?(downie_file.send(:video_path)) &&
+                %w[.jpg .png .webp .mp4.png].none? do |ext|
+                  expected_path = if ext == '.mp4.png'
+                                    "#{downie_file.send(:video_path)}.png"
+                                  else
+                                    downie_file.file.sub(/\.[^.]+$/, ext)
+                                  end
+                  File.exist? expected_path
+                end
+
+    # Generate thumbnail for videos that have YouTube URLs but no local thumbnail
+    `qlmanage -t "#{downie_file.send(:video_path)}" -s 512 -o "#{DOWNLOAD_PATH}"`
+  end
+
+  template = DATA.read.split('@@channels')[0]
+  ERB.new(template).result binding
 end
 
 get '/assets/:file' do
@@ -352,7 +398,7 @@ get '/channels' do
   end
   DATA.pos = END_OF_FILE
   template = DATA.read
-  channels_template = template.split('@@channels')[1]
+  channels_template = template[/@@channels\n(.*?)@@end_channels/m, 1]
   ERB.new(channels_template).result binding
 end
 
@@ -514,7 +560,7 @@ __END__
         <div class="video-card group bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors shadow-lg">
           <!-- Thumbnail -->
           <div class="relative aspect-video bg-gray-200 dark:bg-gray-700">
-            <img src="<%= video['previewImageURL'] || 'https://via.placeholder.com/480x270?text=No+Thumbnail' %>"
+            <img src="<%= video['previewImageURL'] %>"
               alt="<%= video['title'] %>"
               class="w-full h-full object-cover <%= video['watched'].nil? || video['watched']&.empty? ? '' : 'opacity-60' %>">
 
@@ -852,3 +898,4 @@ __END__
   </script>
 </body>
 </html>
+@@end_channels
