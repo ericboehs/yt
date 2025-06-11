@@ -129,7 +129,7 @@ The repository includes pre-commit hooks that automatically run the CI pipeline:
 
 ## License
 
-This project is open source. Feel free to use, modify, and distribute as needed.
+This project is licensed under the [MIT License](https://opensource.org/licenses/MIT). Feel free to use, modify, and distribute as needed.
 
 ## Acknowledgments
 
