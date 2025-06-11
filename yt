@@ -1,0 +1,848 @@
+#! /usr/bin/env ruby
+
+# Eric's Offline YouTube (Download YT videos via Downie with JSON metadata and image previews and then run this script)
+
+require 'bundler/inline'
+
+gemfile do
+  source 'https://rubygems.org'
+
+  gem 'json'
+  gem 'pry'
+  gem 'puma'
+  gem 'sinatra'
+  gem 'rackup'
+  gem 'net-http'
+end
+
+DOWNLOAD_PATH = "#{ENV['HOME']}/Downloads/YouTube/".freeze
+CHANNEL_CACHE_FILE = "#{DOWNLOAD_PATH}channel_cache.json".freeze
+END_OF_FILE = DATA.pos.freeze
+
+class ChannelCache
+  def self.load_cache
+    return {} unless File.exist?(CHANNEL_CACHE_FILE)
+    JSON.parse(File.read(CHANNEL_CACHE_FILE, encoding: 'UTF-8'))
+  rescue
+    {}
+  end
+
+  def self.save_cache(cache)
+    File.write(CHANNEL_CACHE_FILE, cache.to_json, encoding: 'UTF-8')
+  rescue
+    # Silently fail if we can't write
+  end
+
+  def self.get_url(channel_name)
+    cache = load_cache
+    cache[channel_name]
+  end
+
+  def self.set_url(channel_name, url)
+    cache = load_cache
+    cache[channel_name] = url
+    save_cache(cache)
+  end
+end
+
+class DownieJSON
+  attr_reader :file
+
+  def initialize(file)
+    @file = file
+    update_json unless raw_json['lengthInSeconds']
+  end
+
+  def json
+    @json ||= begin
+      result = raw_json.merge(
+        'progress' => progress,
+        'url' => url,
+        'cleanTitle' => clean_title,
+        'channelUrl' => channel_url
+      )
+      result
+    rescue => e
+      puts "Error processing JSON for #{file}: #{e.message}"
+      raw_json.merge(
+        'progress' => 0,
+        'url' => raw_json['url'],
+        'cleanTitle' => raw_json['title'] || 'Unknown Title',
+        'channelUrl' => nil
+      )
+    end
+  end
+
+  def marked_watched
+    File.write file, raw_json.merge(
+      'watched' => 'watched'
+    ).to_json, encoding: 'UTF-8'
+  end
+
+  def launch_iina
+    `open "#{offline_url}"`
+  end
+
+  private
+
+  def progress
+    (start / raw_json['lengthInSeconds'].to_f * 100).to_i
+  rescue StandardError
+    0
+  end
+
+  def start
+    md5_of_file_path = Digest::MD5.hexdigest video_path
+    watch_later_path = '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
+    watch_later_file = "#{watch_later_path}/#{md5_of_file_path.upcase}"
+    return 0 unless File.exist? watch_later_file
+
+    File.readlines(watch_later_file).grep(/start=/).first&.chomp&.split('=')&.last.to_i
+  end
+
+  def update_json
+    File.write file, raw_json.merge(
+      'file' => file,
+      'addedAtEpoch' => added_at_epoch,
+      'offlineURL' => offline_url,
+      'previewImageURL' => preview_image_url,
+      'uploadDateEpoch' => upload_date_epoch,
+      'length' => length,
+      'lengthInSeconds' => length_in_seconds
+    ).to_json, encoding: 'UTF-8'
+  end
+
+  def url
+    return unless raw_json['url']
+
+    uri = URI.parse raw_json['url']
+    return unless uri.query
+
+    query = URI.decode_www_form(uri.query).to_h
+    query['t'] = start
+    uri.query = URI.encode_www_form query
+    uri.to_s
+  end
+
+  def length
+    return raw_json['length'] if raw_json['length']
+
+    seconds = length_in_seconds
+    return '0:00' if seconds.zero?
+    
+    Time.at(seconds).utc.strftime(seconds < 3600 ? '%M:%S' : '%H:%M:%S')
+  end
+
+  def length_in_seconds
+    return raw_json['lengthInSeconds'] if raw_json['lengthInSeconds']
+
+    video_file = video_path
+    return 0 unless File.exist?(video_file)
+
+    # Try ffprobe first (most reliable)
+    if system('which ffprobe > /dev/null 2>&1')
+      duration = `ffprobe -v quiet -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "#{video_file}" 2>/dev/null`.chomp
+      return duration.to_f.to_i if duration.match?(/^\d+\.?\d*$/)
+    end
+
+    # Fallback to mdls (legacy)
+    duration = `mdls "#{video_file}" | grep Duration 2>/dev/null`.chomp
+    if duration.include?('=')
+      return duration.split('= ').last.to_i
+    end
+
+    0
+  end
+
+  def raw_json
+    JSON.parse file_contents
+  end
+
+  def offline_url
+    return "iina://open?url=#{ERB::Util.url_encode video_path}" if File.exist? video_path
+
+    ERB::Util.url_encode raw_json['url']
+  end
+
+  def video_path
+    file.sub(/\.[^.]+$/, '.mp4')
+  end
+
+  def preview_image_url
+    # Check for various image formats
+    %w[.jpg .png .webp .mp4.png].each do |ext|
+      expected_path = ext == '.mp4.png' ? video_path + '.png' : file.sub(/\.[^.]+$/, ext)
+      if File.exist? expected_path
+        return "/thumbnails/#{ERB::Util.url_encode expected_path.gsub DOWNLOAD_PATH, ''}"
+      end
+    end
+
+    raw_json['previewImageURL'] || generate_preview_image
+  end
+
+  def generate_preview_image
+    `qlmanage -t "#{video_path}" -s 512 -o "#{DOWNLOAD_PATH}"`
+    file_name = video_path.gsub(DOWNLOAD_PATH, '') + '.png'
+    "/thumbnails/#{ERB::Util.url_encode file_name}"
+  end
+
+  def added_at_epoch
+    added = `GetFileInfo -d "#{file}"`.chomp
+    return 0 if added.empty?
+
+    time = Time.strptime added, '%m/%d/%Y %H:%M:%S'
+    time.to_i
+  end
+
+  def upload_date_epoch
+    date = Date.parse raw_json['uploadDate'] || raw_json['prepareDate']
+    date.to_time.to_i
+  end
+
+  def file_contents
+    File.read file, encoding: 'UTF-8'
+  end
+
+  def clean_title
+    title = raw_json['title'] || ''
+    authors = raw_json['authors'] || []
+    
+    # If we have authors and the title starts with the first author's name, clean it
+    if !authors.empty? && title.start_with?(authors.first)
+      # Remove "Channel Name - " from the beginning
+      cleaned = title.sub(/^#{Regexp.escape(authors.first)}\s*-\s*/, '')
+      return cleaned.empty? ? title : cleaned
+    end
+    
+    title
+  end
+
+  def channel_url
+    authors = raw_json['authors'] || []
+    return nil if authors.empty? || !is_youtube_video?
+    
+    channel_name = authors.first
+    
+    # Check cache first
+    cached_url = ChannelCache.get_url(channel_name)
+    return cached_url if cached_url
+    
+    # Return search URL immediately to avoid blocking page load
+    # The URL checking can be done lazily when user actually clicks
+    search_url = "https://www.youtube.com/results?search_query=#{ERB::Util.url_encode(channel_name)}&sp=EgIQAg%253D%253D"
+    search_url
+  end
+
+  def check_and_cache_channel_url(channel_name)
+    return if ChannelCache.get_url(channel_name) # Already cached
+    
+    # Try @username format first
+    username = channel_name.gsub(/[^a-zA-Z0-9]/, '').downcase
+    at_url = "https://www.youtube.com/@#{username}"
+    
+    if url_exists?(at_url)
+      ChannelCache.set_url(channel_name, at_url)
+      return at_url
+    end
+    
+    # If @username 404s, cache the search URL instead
+    search_url = "https://www.youtube.com/results?search_query=#{ERB::Util.url_encode(channel_name)}&sp=EgIQAg%253D%253D"
+    ChannelCache.set_url(channel_name, search_url)
+    search_url
+  end
+
+  def url_exists?(url)
+    puts "Checking channel URL: #{url}"
+    uri = URI(url)
+    response = Net::HTTP.get_response(uri)
+    success = response.code != '404'
+    puts "  -> #{response.code} #{success ? 'SUCCESS' : 'FAILED'}"
+    success
+  rescue => e
+    puts "  -> ERROR: #{e.message}"
+    false
+  end
+
+  def is_youtube_video?
+    url = raw_json['url'] || ''
+    url.include?('youtube.com')
+  end
+end
+
+class YouTubeFiles
+  def initialize(sort = nil, direction = nil, filter = nil)
+    @sort = sort || 'addedAtEpoch'
+    @direction = direction || 'desc'
+    @filter = filter || 'all'
+  end
+
+  def json
+    downie_files.map { |df| df.json }
+  end
+
+  def downie_files
+    files = json_files.map { |file| DownieJSON.new(file) }
+    
+    # Apply filter
+    files = filter_files(files) if @filter != 'all'
+    
+    # Apply sort
+    sorted = files.sort_by { |item| item.json[@sort] || item.json['prepareDate'] }
+    
+    @direction == 'asc' ? sorted : sorted.reverse
+  end
+
+  private
+
+  def filter_files(files)
+    files.select do |video|
+      case @filter
+      when 'unwatched'
+        progress = video.json['progress'] || 0
+        progress == 0 && (video.json['watched'].nil? || video.json['watched'].empty?)
+      when 'partial'
+        progress = video.json['progress'] || 0
+        progress > 0 && progress < 95 && (video.json['watched'].nil? || video.json['watched'].empty?)
+      when 'watched'
+        !video.json['watched'].nil? && !video.json['watched'].empty?
+      else
+        true
+      end
+    end
+  end
+
+  def json_files
+    Dir["#{DOWNLOAD_PATH}*.json"].reject { |file| file.end_with?('channel_cache.json') }
+  end
+end
+
+set :bind, '0.0.0.0'
+set :port, 7778
+
+get '/' do
+  DATA.pos = END_OF_FILE
+  videos = YouTubeFiles.new params[:sort], params[:dir], params[:filter]
+  ERB.new(DATA.read).result binding
+end
+
+get '/assets/:file' do
+  send_file "#{Dir.pwd}/yt-assets/#{params[:file]}", disposition: 'inline'
+end
+
+get '/thumbnails/:file' do
+  send_file "#{DOWNLOAD_PATH}#{params[:file]}", disposition: 'inline'
+end
+
+get '/channel-cache' do
+  content_type :json
+  ChannelCache.load_cache.to_json
+end
+
+get '/channels' do
+  channels_hash = ChannelCache.load_cache || {}
+  # Sort by link type (search links first), then alphabetically by channel name
+  @channels = channels_hash.sort_by do |channel_name, channel_url|
+    is_search_link = !channel_url.include?('youtube.com/@')
+    [is_search_link ? 0 : 1, channel_name.downcase]
+  end
+  DATA.pos = END_OF_FILE
+  template = DATA.read
+  channels_template = template.split('@@channels')[1]
+  ERB.new(channels_template).result binding
+end
+
+post '/channel-cache' do
+  channel_name = params[:channel_name]
+  channel_url = params[:channel_url]
+  
+  if channel_name && channel_url
+    ChannelCache.set_url(channel_name, channel_url)
+    redirect '/channels'
+  else
+    status 400
+    { error: 'Missing channel_name or channel_url' }.to_json
+  end
+end
+
+post '/check-channel/:channel_name' do
+  content_type :json
+  channel_name = params[:channel_name]
+  downie_json = DownieJSON.new('')
+  downie_json.instance_variable_set(:@file, '')
+  downie_json.instance_variable_set(:@raw_json, { 'authors' => [channel_name], 'url' => 'https://youtube.com/watch?v=test' })
+  
+  url = downie_json.check_and_cache_channel_url(channel_name)
+  { channel_name: channel_name, url: url }.to_json
+end
+
+delete '/channel-cache/:channel_name' do
+  cache = ChannelCache.load_cache
+  cache.delete(params[:channel_name])
+  ChannelCache.save_cache(cache)
+  redirect '/channels'
+end
+
+def fetch_assets
+  return if Dir.exist? 'yt-assets'
+
+  FileUtils.mkdir 'yt-assets'
+  `cd yt-assets; curl -o tailwind-browser.js https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4`
+end
+
+`which iina`
+unless $?.success?
+  warn 'IINA not found. Please run `brew install --cask iina` to proceed.'
+  exit 1
+end
+
+fetch_assets
+Sinatra::Application.run!
+
+__END__
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Eric's Offline YouTube</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' class='h-5 w-5' viewBox='0 0 20 20' fill='red'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z' clip-rule='evenodd' /%3E%3C/svg%3E" type="image/svg+xml" />
+  <script src="./assets/tailwind-browser.js"></script>
+  <style>
+    .progress-bar {
+      background: linear-gradient(to right, #ff0000 var(--progress), transparent var(--progress));
+    }
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
+  <!-- Header -->
+  <header class="bg-gray-100 dark:bg-gray-800 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <h1 class="text-xl font-bold text-red-500">Offline YouTube</h1>
+        <div class="text-sm text-gray-600 dark:text-gray-400">
+          <%= `ls ~/Downloads/YouTube/*.mp4 | wc -l` %> videos / 
+          <%= `du -h ~/Downloads/YouTube/ | tail -1 | awk '{print $1}'` %>
+        </div>
+      </div>
+      
+      <!-- Search Bar -->
+      <div class="max-w-xl flex-1 mx-8">
+        <div class="relative">
+          <input id="search-input" type="text" placeholder="Search videos..." 
+                 class="w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white px-4 py-2 pl-10 rounded-full focus:outline-none focus:ring-2 focus:ring-red-500 border border-gray-300 dark:border-gray-600">
+          <svg class="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+        </div>
+      </div>
+      
+      <div class="flex items-center space-x-4">
+        <a href="/channels" class="text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors text-sm">
+          Manage Channels
+        </a>
+        <a href="https://www.youtube.com" target="_blank" class="text-red-500 hover:text-red-400">
+          <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Sort Bar -->
+  <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 py-4 px-6">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Videos</h2>
+        <div class="flex items-center space-x-6">
+          <div class="flex items-center space-x-2">
+            <span class="text-sm text-gray-600 dark:text-gray-400 font-sans">Sort by:</span>
+            <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
+              <option class="font-sans" value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Recently Downloaded</option>
+              <option class="font-sans" value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Recently Created</option>
+            </select>
+            <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+            <button id="sort-direction" class="ml-2 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
+              <svg id="sort-asc" class="w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
+              </svg>
+              <svg id="sort-desc" class="w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' unless params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4"/>
+              </svg>
+            </button>
+          </div>
+          
+          <div class="flex items-center space-x-2">
+            <span class="text-sm text-gray-600 dark:text-gray-400 font-sans">Filter:</span>
+            <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
+              <option class="font-sans" value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All Videos</option>
+              <option class="font-sans" value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
+              <option class="font-sans" value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partially Played</option>
+              <option class="font-sans" value="watched" <%= 'selected' if params[:filter] == 'watched' %>>Watched</option>
+            </select>
+            <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+      
+      <div class="text-sm text-gray-500 dark:text-gray-400">
+        Showing <%= videos&.json&.length || 0 %> videos
+      </div>
+    </div>
+  </div>
+
+  <!-- Video Grid -->
+  <main class="px-6 py-8">
+    <div id="video-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+      <% (videos&.json || []).each do |video| %>
+        <div class="video-card group bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors shadow-lg">
+          <!-- Thumbnail -->
+          <div class="relative aspect-video bg-gray-200 dark:bg-gray-700">
+            <img src="<%= video['previewImageURL'] || 'https://via.placeholder.com/480x270?text=No+Thumbnail' %>" 
+                 alt="<%= video['title'] %>"
+                 class="w-full h-full object-cover <%= video['watched'].nil? || video['watched']&.empty? ? '' : 'opacity-60' %>">
+            
+            <!-- Play Button Overlay -->
+            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style="background-color: rgba(0, 0, 0, 0.6);">
+              <svg class="w-16 h-16 text-white" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z"/>
+              </svg>
+            </div>
+            
+            <!-- Duration -->
+            <div class="absolute bottom-2 right-2 bg-black bg-opacity-75 text-white text-sm px-2 py-1 rounded">
+              <%= video['length'] %>
+            </div>
+            
+            <!-- Progress Bar -->
+            <% progress_value = video['watched'] ? 100 : (video['progress'] || 0) %>
+            <div class="absolute bottom-0 left-0 right-0 h-1 bg-gray-300 dark:bg-gray-600">
+              <div class="h-full bg-red-500" style="width: <%= progress_value %>%"></div>
+            </div>
+          </div>
+          
+          <!-- Video Info -->
+          <div class="p-4">
+            <h3 class="video-title text-base font-medium line-clamp-2 mb-2 text-gray-900 dark:text-white">
+              <%= video['cleanTitle'] || video['title'] %>
+            </h3>
+            <div class="text-sm text-gray-600 dark:text-gray-400 space-y-2">
+              <div class="video-author">
+                <% if video['channelUrl'] %>
+                  <a href="<%= video['channelUrl'] %>" target="_blank" class="hover:text-red-500 transition-colors">
+                    <%= video['authors']&.join(', ') %>
+                  </a>
+                <% else %>
+                  <%= video['authors']&.join(', ') %>
+                <% end %>
+              </div>
+              <div class="flex items-center justify-between">
+                <time class="relative-time" datetime="<%= video['uploadDateEpoch'] %>" title="<%= Time.at(video['uploadDateEpoch']).strftime('%B %d, %Y at %I:%M %p CT') if video['uploadDateEpoch'] %>">
+                  <%= video['uploadDate'] %>
+                </time>
+                <div class="flex space-x-3">
+                  <button class="hover:text-green-500 text-lg" title="Mark watched">✓</button>
+                  <button class="hover:text-red-500 text-lg" title="Delete">🗑</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      <% end %>
+    </div>
+
+    <!-- YouTube Search Fallback -->
+    <div id="youtube-fallback" class="hidden mt-12 text-center">
+      <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-6 max-w-md mx-auto">
+        <p id="fallback-text" class="text-gray-600 dark:text-gray-400 mb-4">Search on YouTube for more videos</p>
+        <a id="youtube-search-link" href="https://www.youtube.com/results?search_query=" target="_blank" 
+           class="inline-flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+          <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+          </svg>
+          Search on YouTube
+        </a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // Search functionality
+    const searchInput = document.getElementById('search-input');
+    const videoGrid = document.getElementById('video-grid');
+    const youtubeFallback = document.getElementById('youtube-fallback');
+    const youtubeSearchLink = document.getElementById('youtube-search-link');
+    const videoCards = document.querySelectorAll('.video-card');
+
+    searchInput.addEventListener('input', (e) => {
+      const query = e.target.value.toLowerCase().trim();
+      const fallbackText = document.getElementById('fallback-text');
+      
+      if (!query) {
+        // Show all videos when search is empty
+        videoCards.forEach(card => card.style.display = 'block');
+        youtubeFallback.classList.add('hidden');
+        return;
+      }
+
+      let visibleCount = 0;
+      
+      videoCards.forEach(card => {
+        const title = card.querySelector('.video-title').textContent.toLowerCase();
+        const author = card.querySelector('.video-author').textContent.toLowerCase();
+        
+        const matches = title.includes(query) || author.includes(query);
+        card.style.display = matches ? 'block' : 'none';
+        
+        if (matches) visibleCount++;
+      });
+
+      // Update YouTube fallback link and text
+      // Update YouTube fallback link and text
+      youtubeFallback.classList.remove('hidden');
+      youtubeSearchLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
+      
+      if (visibleCount === 0) {
+        fallbackText.textContent = 'No videos found in your collection.';
+      } else {
+        fallbackText.textContent = `Search "${query}" on YouTube for more videos`;
+      }
+    });
+
+    // Convert timestamps to relative time
+    function timeAgo(timestamp) {
+      const now = Math.floor(Date.now() / 1000);
+      const diff = now - timestamp;
+      
+      if (diff < 60) return 'Just now';
+      if (diff < 3600) return Math.floor(diff / 60) + ' minutes ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + ' hours ago';
+      if (diff < 2592000) return Math.floor(diff / 86400) + ' days ago';
+      if (diff < 31536000) return Math.floor(diff / 2592000) + ' months ago';
+      return Math.floor(diff / 31536000) + ' years ago';
+    }
+
+    function updateRelativeTimes() {
+      document.querySelectorAll('.relative-time').forEach(timeEl => {
+        const timestamp = parseInt(timeEl.getAttribute('datetime'));
+        if (timestamp) {
+          timeEl.textContent = timeAgo(timestamp);
+        }
+      });
+    }
+
+    // Update relative times on load and every minute
+    updateRelativeTimes();
+    setInterval(updateRelativeTimes, 60000);
+
+    // Sort functionality
+    document.getElementById('sort-select').addEventListener('change', function() {
+      const sortBy = this.value;
+      const currentParams = new URLSearchParams(window.location.search);
+      currentParams.set('sort', sortBy);
+      window.location.search = currentParams.toString();
+    });
+
+    // Sort direction toggle
+    document.getElementById('sort-direction').addEventListener('click', function() {
+      const currentParams = new URLSearchParams(window.location.search);
+      const currentDir = currentParams.get('dir') || 'desc';
+      const newDir = currentDir === 'desc' ? 'asc' : 'desc';
+      currentParams.set('dir', newDir);
+      window.location.search = currentParams.toString();
+    });
+
+    // Filter functionality
+    document.getElementById('filter-select').addEventListener('change', function() {
+      const filterBy = this.value;
+      const currentParams = new URLSearchParams(window.location.search);
+      if (filterBy === 'all') {
+        currentParams.delete('filter');
+      } else {
+        currentParams.set('filter', filterBy);
+      }
+      window.location.search = currentParams.toString();
+    });
+  </script>
+</body>
+</html>
+
+@@channels
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Manage Channels - Offline YouTube</title>
+  <script src="./assets/tailwind-browser.js"></script>
+</head>
+<body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
+  <!-- Header -->
+  <header class="bg-gray-100 dark:bg-gray-800 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <h1 class="text-xl font-bold text-red-500">
+          <a href="/">Offline YouTube</a>
+        </h1>
+        <span class="text-sm text-gray-600 dark:text-gray-400">Channel Management</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-4xl mx-auto px-6 py-8">
+    <div class="mb-8">
+      <h2 class="text-2xl font-bold mb-4">Channel URL Cache</h2>
+      <p class="text-gray-600 dark:text-gray-400 mb-6">
+        Manage cached channel URLs. The app automatically tries @username URLs first, then caches search URLs if they don't work.
+      </p>
+
+      <!-- Add New Channel -->
+      <div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-6 mb-8">
+        <h3 class="text-lg font-semibold mb-4">Add/Update Channel URL</h3>
+        <form method="POST" action="/channel-cache" class="flex gap-4">
+          <input type="text" name="channel_name" placeholder="Channel Name" required
+                 class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+          <input type="url" name="channel_url" placeholder="https://www.youtube.com/@channelname" required
+                 class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+          <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+            Save
+          </button>
+        </form>
+      </div>
+
+      <!-- Channel List -->
+      <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h3 class="text-lg font-semibold">Cached Channels (<%= @channels&.length || 0 %>)</h3>
+        </div>
+        
+        <% if @channels&.empty? %>
+          <div class="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
+            No channels cached yet. URLs will be automatically cached as you browse videos.
+          </div>
+        <% else %>
+          <div class="divide-y divide-gray-200 dark:divide-gray-700">
+            <% (@channels || []).each do |channel_name, channel_url| %>
+              <div class="px-6 py-4 flex items-center justify-between">
+                <div class="flex-1">
+                  <div class="font-medium"><%= channel_name %></div>
+                  <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                    <div class="edit-display">
+                      <a href="<%= channel_url %>" target="_blank" class="hover:text-red-500 transition-colors">
+                        <%= channel_url %>
+                      </a>
+                    </div>
+                    <form method="POST" action="/channel-cache" class="edit-form hidden">
+                      <input type="hidden" name="channel_name" value="<%= channel_name %>">
+                      <input type="url" name="channel_url" value="<%= channel_url %>" 
+                             class="w-full px-2 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                    </form>
+                  </div>
+                </div>
+                <div class="flex items-center space-x-2">
+                  <% if channel_url.include?('youtube.com/@') %>
+                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                      Direct Link
+                    </span>
+                  <% else %>
+                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                      Search Link
+                    </span>
+                  <% end %>
+                  <button onclick="toggleEdit(this)" class="edit-btn text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 p-1" title="Edit URL">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/>
+                    </svg>
+                  </button>
+                  <button onclick="saveEdit(this)" class="save-btn hidden text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 text-sm">
+                    Save
+                  </button>
+                  <button onclick="cancelEdit(this)" class="cancel-btn hidden text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300 text-sm">
+                    Cancel
+                  </button>
+                  <button onclick="confirmDelete('<%= channel_name %>')" class="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 p-1" title="Delete channel">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        <% end %>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function toggleEdit(button) {
+      const row = button.closest('.px-6');
+      const editDisplay = row.querySelector('.edit-display');
+      const editForm = row.querySelector('.edit-form');
+      const editBtn = row.querySelector('.edit-btn');
+      const saveBtn = row.querySelector('.save-btn');
+      const cancelBtn = row.querySelector('.cancel-btn');
+      
+      editDisplay.classList.add('hidden');
+      editForm.classList.remove('hidden');
+      editBtn.classList.add('hidden');
+      saveBtn.classList.remove('hidden');
+      cancelBtn.classList.remove('hidden');
+      
+      editForm.querySelector('input[name="channel_url"]').focus();
+    }
+    
+    function cancelEdit(button) {
+      const row = button.closest('.px-6');
+      const editDisplay = row.querySelector('.edit-display');
+      const editForm = row.querySelector('.edit-form');
+      const editBtn = row.querySelector('.edit-btn');
+      const saveBtn = row.querySelector('.save-btn');
+      const cancelBtn = row.querySelector('.cancel-btn');
+      
+      editDisplay.classList.remove('hidden');
+      editForm.classList.add('hidden');
+      editBtn.classList.remove('hidden');
+      saveBtn.classList.add('hidden');
+      cancelBtn.classList.add('hidden');
+      
+      // Reset the input value to original
+      const originalUrl = editDisplay.querySelector('a').href;
+      editForm.querySelector('input[name="channel_url"]').value = originalUrl;
+    }
+    
+    function saveEdit(button) {
+      const row = button.closest('.px-6');
+      const editForm = row.querySelector('.edit-form');
+      editForm.submit();
+    }
+    
+    function confirmDelete(channelName) {
+      if (confirm(`Are you sure you want to delete "${channelName}" from the cache?`)) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = `/channel-cache/${encodeURIComponent(channelName)}`;
+        
+        const methodInput = document.createElement('input');
+        methodInput.type = 'hidden';
+        methodInput.name = '_method';
+        methodInput.value = 'delete';
+        form.appendChild(methodInput);
+        
+        document.body.appendChild(form);
+        form.submit();
+      }
+    }
+  </script>
+</body>
+</html>
