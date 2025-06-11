@@ -288,14 +288,14 @@ class DownieJSON
   end
 
   def url_exists?(url)
-    puts "Checking channel URL: #{url}"
+    puts "Checking channel URL: #{url}" unless ENV['YT_TEST_MODE']
     uri = URI(url)
     response = Net::HTTP.get_response(uri)
     success = response.code != '404'
-    puts "  -> #{response.code} #{success ? 'SUCCESS' : 'FAILED'}"
+    puts "  -> #{response.code} #{success ? 'SUCCESS' : 'FAILED'}" unless ENV['YT_TEST_MODE']
     success
   rescue StandardError => e
-    puts "  -> ERROR: #{e.message}"
+    puts "  -> ERROR: #{e.message}" unless ENV['YT_TEST_MODE']
     false
   end
 
@@ -523,7 +523,12 @@ def fetch_assets
   return if Dir.exist? 'yt-assets'
 
   FileUtils.mkdir 'yt-assets'
-  `cd yt-assets; curl -o tailwind-browser.js https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4`
+  if ENV['YT_TEST_MODE']
+    # In test mode, just create a dummy file
+    File.write('yt-assets/tailwind-browser.js', '// test mode')
+  else
+    `cd yt-assets; curl -o tailwind-browser.js https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4`
+  end
 end
 
 `which iina`

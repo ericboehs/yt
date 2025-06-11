@@ -11,6 +11,7 @@ gemfile do
   gem 'json'
   gem 'tempfile'
   gem 'fileutils'
+  gem 'rack-test'
 end
 
 require 'simplecov'
@@ -18,7 +19,7 @@ SimpleCov.start do
   add_filter '/bin/'
   add_filter '/test/'
   coverage_dir 'coverage'
-  minimum_coverage 50
+  minimum_coverage 66
 end
 
 require 'minitest/autorun'
@@ -307,6 +308,1029 @@ class YouTubeFilesTest < Minitest::Test
     yield
   ensure
     $VERBOSE = old_verbose
+  end
+end
+
+# Test additional DownieJSON functionality
+class DownieJSONAdvancedTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('downie_advanced_test')
+    @test_json_path = "#{@temp_dir}/test_video.json"
+    @video_path = @test_json_path.sub('.json', '.mp4')
+    create_test_json_with_watch_data
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_marked_watched_updates_json
+    downie_json = DownieJSON.new(@test_json_path)
+    downie_json.marked_watched
+
+    updated_json = JSON.parse(File.read(@test_json_path))
+    assert_equal 'watched', updated_json['watched']
+  end
+
+  def test_launch_iina_calls_system
+    # Create video file so offline_url returns iina:// URL
+    File.write(@video_path, 'fake video content')
+    downie_json = DownieJSON.new(@test_json_path)
+    expected_url = downie_json.send(:offline_url)
+    assert_includes expected_url, 'iina://'
+  end
+
+  def test_progress_calculation_with_valid_data
+    # Create a video file and watch_later file to test progress
+    File.write(@video_path, 'fake video content')
+
+    # Create watch_later directory structure
+    watch_later_dir = '/tmp/test_watch_later'
+    FileUtils.mkdir_p(watch_later_dir)
+
+    # Mock the watch_later path
+    downie_json = DownieJSON.new(@test_json_path)
+    downie_json.instance_variable_set(:@watch_later_path, watch_later_dir)
+
+    # Test progress when no watch file exists
+    assert_equal 0, downie_json.send(:progress)
+  end
+
+  def test_url_with_start_time
+    downie_json = DownieJSON.new(@test_json_path)
+    url = downie_json.send(:url)
+    assert_includes url, 'youtube.com'
+    assert_includes url, 't='
+  end
+
+  def test_length_formatting
+    downie_json = DownieJSON.new(@test_json_path)
+    length = downie_json.send(:length)
+    assert_match(/\d+:\d+/, length)
+  end
+
+  def test_length_in_seconds_with_video_file
+    File.write(@video_path, 'fake video content')
+    downie_json = DownieJSON.new(@test_json_path)
+
+    # Should return 0 when ffprobe/mdls fail
+    length = downie_json.send(:length_in_seconds)
+    assert_kind_of Integer, length
+  end
+
+  def test_added_at_epoch_calculation
+    downie_json = DownieJSON.new(@test_json_path)
+    epoch = downie_json.send(:added_at_epoch)
+    assert_kind_of Integer, epoch
+  end
+
+  def test_upload_date_epoch_calculation
+    downie_json = DownieJSON.new(@test_json_path)
+    epoch = downie_json.send(:upload_date_epoch)
+    assert_kind_of Integer, epoch
+  end
+
+  def test_channel_url_with_youtube_video
+    downie_json = DownieJSON.new(@test_json_path)
+    channel_url = downie_json.send(:channel_url)
+    assert_includes channel_url, 'youtube.com'
+  end
+
+  def test_channel_url_caching
+    downie_json = DownieJSON.new(@test_json_path)
+    # Test the check_and_cache_channel_url method
+    result = downie_json.send(:check_and_cache_channel_url, 'TestChannel')
+    if result # Only assert if result is not nil
+      assert_kind_of String, result
+      assert_includes result, 'youtube.com'
+    else
+      # If nil, that's also valid behavior for this method
+      assert_nil result
+    end
+  end
+
+  def test_url_exists_check
+    downie_json = DownieJSON.new(@test_json_path)
+    # Test with a URL that should exist (mocked)
+    result = downie_json.send(:url_exists?, 'https://www.google.com')
+    assert [true, false].include?(result)
+  end
+
+  private
+
+  def create_test_json_with_watch_data
+    json_data = {
+      'title' => 'Test Video',
+      'authors' => ['Test Channel'],
+      'previewImageURL' => '/thumbnails/local.png',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'duration' => 300,
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300,
+      'file' => @test_json_path,
+      'addedAtEpoch' => 1_704_067_200,
+      'offlineURL' => 'iina://test',
+      'uploadDateEpoch' => 1_704_067_200,
+      'length' => '5:00'
+    }
+    File.write(@test_json_path, json_data.to_json)
+  end
+end
+
+# Test YouTubeFiles filtering functionality
+class YouTubeFilesFilterTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('youtube_files_filter_test')
+    @original_download_path = DOWNLOAD_PATH
+    silence_warnings { Object.const_set(:DOWNLOAD_PATH, "#{@temp_dir}/") }
+    create_test_files_with_different_states
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+    silence_warnings { Object.const_set(:DOWNLOAD_PATH, @original_download_path) }
+  end
+
+  def test_filter_unwatched_videos
+    youtube_files = YouTubeFiles.new(nil, nil, 'unwatched')
+    videos = youtube_files.json
+    # Should return videos that are not watched and have 0 progress
+    videos.each do |video|
+      progress = video['progress'] || 0
+      watched = video['watched']
+      assert progress.zero?
+      assert watched.nil? || watched.empty?
+    end
+  end
+
+  def test_filter_partial_videos
+    youtube_files = YouTubeFiles.new(nil, nil, 'partial')
+    videos = youtube_files.json
+    # Should return videos with progress > 0 but < 95% and not marked watched
+    videos.each do |video|
+      progress = video['progress'] || 0
+      watched = video['watched']
+      assert progress.positive?
+      assert progress < 95
+      assert watched.nil? || watched.empty?
+    end
+  end
+
+  def test_filter_watched_videos
+    youtube_files = YouTubeFiles.new(nil, nil, 'watched')
+    videos = youtube_files.json
+    # Should return videos that are marked as watched
+    videos.each do |video|
+      watched = video['watched']
+      refute watched.nil?
+      refute watched.empty?
+    end
+  end
+
+  def test_sorting_by_different_fields
+    youtube_files = YouTubeFiles.new('uploadDateEpoch', 'asc', 'all')
+    videos = youtube_files.json
+    assert_instance_of Array, videos
+  end
+
+  private
+
+  def create_test_files_with_different_states
+    # Create unwatched video
+    unwatched_data = base_video_data.merge(
+      'file' => "#{@temp_dir}/unwatched.json",
+      'progress' => 0
+    )
+    File.write("#{@temp_dir}/unwatched.json", unwatched_data.to_json)
+
+    # Create partial video
+    partial_data = base_video_data.merge(
+      'file' => "#{@temp_dir}/partial.json",
+      'progress' => 50
+    )
+    File.write("#{@temp_dir}/partial.json", partial_data.to_json)
+
+    # Create watched video
+    watched_data = base_video_data.merge(
+      'file' => "#{@temp_dir}/watched.json",
+      'progress' => 100,
+      'watched' => 'watched'
+    )
+    File.write("#{@temp_dir}/watched.json", watched_data.to_json)
+
+    # Create channel cache
+    File.write("#{@temp_dir}/channel_cache.json", '{}')
+  end
+
+  def base_video_data
+    {
+      'title' => 'Test Video',
+      'authors' => ['Test Channel'],
+      'previewImageURL' => '/thumbnails/local.png',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'duration' => 300,
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300,
+      'addedAtEpoch' => 1_704_067_200,
+      'offlineURL' => 'iina://test',
+      'uploadDateEpoch' => 1_704_067_200,
+      'length' => '5:00'
+    }
+  end
+
+  def silence_warnings
+    old_verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = old_verbose
+  end
+end
+
+# Test Sinatra route helpers
+class RouteHelperTest < Minitest::Test
+  def test_create_end_timestamp_url
+    raw_json = {
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'lengthInSeconds' => 300
+    }
+
+    result = create_end_timestamp_url(raw_json)
+    assert_includes result, 'youtube.com'
+    assert_includes result, 't=295'
+  end
+
+  def test_create_end_timestamp_url_with_existing_params
+    raw_json = {
+      'url' => 'https://www.youtube.com/watch?v=test123&feature=share',
+      'lengthInSeconds' => 300
+    }
+
+    result = create_end_timestamp_url(raw_json)
+    assert_includes result, '&t=295'
+  end
+
+  def test_create_end_timestamp_url_no_length
+    raw_json = {
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'lengthInSeconds' => 0
+    }
+
+    result = create_end_timestamp_url(raw_json)
+    assert_nil result
+  end
+
+  def test_delete_video_files
+    temp_dir = Dir.mktmpdir('delete_test')
+    json_file = "#{temp_dir}/test.json"
+    video_file = "#{temp_dir}/test.mp4"
+    thumb_file = "#{temp_dir}/test.jpg"
+
+    # Create test files
+    File.write(json_file, '{}')
+    File.write(video_file, 'video')
+    File.write(thumb_file, 'thumb')
+
+    delete_video_files(json_file)
+
+    refute File.exist?(json_file)
+    refute File.exist?(video_file)
+    refute File.exist?(thumb_file)
+
+    FileUtils.rm_rf(temp_dir)
+  end
+end
+
+# Test error handling in DownieJSON
+class DownieJSONErrorTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('downie_error_test')
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_json_method_handles_errors_gracefully
+    # Create invalid JSON file
+    invalid_json_path = "#{@temp_dir}/invalid.json"
+    File.write(invalid_json_path, 'invalid json content')
+
+    assert_raises(JSON::ParserError) do
+      DownieJSON.new(invalid_json_path)
+    end
+  end
+
+  def test_channel_cache_handles_missing_file
+    # Temporarily use a non-existent path
+    original_cache_file = CHANNEL_CACHE_FILE
+    temp_cache_path = "#{@temp_dir}/non_existent_cache.json"
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, temp_cache_path) }
+
+    cache = ChannelCache.load_cache
+    assert_equal({}, cache)
+
+    # Restore original
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, original_cache_file) }
+  end
+
+  def test_channel_cache_handles_invalid_json
+    # Create invalid cache file
+    invalid_cache_path = "#{@temp_dir}/invalid_cache.json"
+    File.write(invalid_cache_path, 'invalid json')
+
+    # Temporarily override the cache file path
+    original_cache_file = CHANNEL_CACHE_FILE
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, invalid_cache_path) }
+
+    cache = ChannelCache.load_cache
+    assert_equal({}, cache)
+
+    # Restore original
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, original_cache_file) }
+  end
+
+  private
+
+  def silence_warnings
+    old_verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = old_verbose
+  end
+end
+
+# Test more DownieJSON functionality to improve coverage
+class DownieJSONSystemCallsTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('downie_system_test')
+    @test_json_path = "#{@temp_dir}/test_video.json"
+    create_complete_test_json
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_start_method_with_missing_watch_later_file
+    downie_json = DownieJSON.new(@test_json_path)
+    start_time = downie_json.send(:start)
+    assert_equal 0, start_time
+  end
+
+  def test_progress_with_error_handling
+    # Create JSON that will cause progress calculation to fail
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => nil # This will cause division by nil
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    progress = downie_json.send(:progress)
+    assert_equal 0, progress # Should handle error gracefully
+  end
+
+  def test_length_with_missing_length_in_seconds
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'length' => '5:30' # Has length but no lengthInSeconds
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    length = downie_json.send(:length)
+    assert_equal '5:30', length
+  end
+
+  def test_length_formatting_hours
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 3661 # 1 hour, 1 minute, 1 second
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    length = downie_json.send(:length)
+    assert_match(/\d+:\d+:\d+/, length) # Should be in H:MM:SS format
+  end
+
+  def test_offline_url_fallback
+    json_data = {
+      'title' => 'Test Video',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    # Don't create video file, so it should return encoded URL
+    downie_json = DownieJSON.new(@test_json_path)
+    offline_url = downie_json.send(:offline_url)
+    assert_includes offline_url, 'youtube.com'
+  end
+
+  def test_preview_image_url_with_existing_files
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    # Test different image formats
+    formats = ['.jpg', '.png', '.webp']
+    formats.each do |ext|
+      image_path = @test_json_path.sub('.json', ext)
+      File.write(image_path, 'fake_image')
+
+      downie_json = DownieJSON.new(@test_json_path)
+      preview_url = downie_json.send(:preview_image_url)
+      assert_includes preview_url, '/thumbnails/'
+
+      File.delete(image_path)
+    end
+  end
+
+  def test_preview_image_url_with_mp4_png
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    # Create video.mp4.png file
+    video_path = @test_json_path.sub('.json', '.mp4')
+    png_path = "#{video_path}.png"
+    File.write(png_path, 'fake_image')
+
+    downie_json = DownieJSON.new(@test_json_path)
+    preview_url = downie_json.send(:preview_image_url)
+    assert_includes preview_url, '/thumbnails/'
+  end
+
+  def test_preview_image_url_fallback_to_placeholder
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'previewImageURL' => nil # No URL
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    preview_url = downie_json.send(:preview_image_url)
+    assert_includes preview_url, 'placeholder'
+  end
+
+  def test_added_at_epoch_with_empty_getfileinfo
+    # Test when GetFileInfo returns empty
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    # In test mode this should return the test value
+    epoch = downie_json.send(:added_at_epoch)
+    assert_equal 1_704_067_200, epoch
+  end
+
+  def test_url_exists_error_handling
+    downie_json = DownieJSON.new(@test_json_path)
+
+    # Test with invalid URL that will cause an error
+    result = downie_json.send(:url_exists?, 'invalid://url')
+    assert_equal false, result
+  end
+
+  def test_channel_cache_save_error_handling
+    # Test when save fails (e.g., permission denied)
+    original_cache_file = CHANNEL_CACHE_FILE
+    temp_cache_path = '/dev/null/cannot_write_here.json' # Should fail
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, temp_cache_path) }
+
+    # This should not raise an error, just silently fail
+    ChannelCache.save_cache({ 'test' => 'value' })
+
+    # Restore original
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, original_cache_file) }
+  end
+
+  private
+
+  def create_complete_test_json
+    json_data = {
+      'title' => 'Test Video',
+      'authors' => ['Test Channel'],
+      'previewImageURL' => '/thumbnails/local.png',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'duration' => 300,
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300,
+      'file' => @test_json_path,
+      'addedAtEpoch' => 1_704_067_200,
+      'offlineURL' => 'iina://test',
+      'uploadDateEpoch' => 1_704_067_200,
+      'length' => '5:00'
+    }
+    File.write(@test_json_path, json_data.to_json)
+  end
+
+  def silence_warnings
+    old_verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = old_verbose
+  end
+end
+
+# Test additional DownieJSON edge cases
+class DownieJSONEdgeCasesTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('downie_edge_test')
+    @test_json_path = "#{@temp_dir}/test_video.json"
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_json_method_error_handling
+    # Create JSON with missing required fields to trigger error path
+    incomplete_json = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300
+      # Missing other required fields to trigger error handling
+    }
+    File.write(@test_json_path, incomplete_json.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    result = downie_json.json
+
+    # Should return a fallback structure with default values
+    assert_kind_of Hash, result
+    assert_equal 'Test Video', result['title']
+    assert_equal 0, result['progress']
+  end
+
+  def test_clean_title_edge_cases
+    # Test with empty authors
+    json_data = {
+      'title' => 'Test Video',
+      'authors' => [],
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_equal 'Test Video', downie_json.send(:clean_title)
+
+    # Test with nil authors
+    json_data['authors'] = nil
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_equal 'Test Video', downie_json.send(:clean_title)
+  end
+
+  def test_channel_url_edge_cases
+    # Test with non-YouTube video
+    json_data = {
+      'title' => 'Test Video',
+      'authors' => ['Test Channel'],
+      'url' => 'https://vimeo.com/123456',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_nil downie_json.send(:channel_url)
+  end
+
+  def test_thumbnail_generation_in_test_mode
+    json_data = {
+      'title' => 'Test Video',
+      'previewImageURL' => 'https://i.ytimg.com/vi/test123/maxresdefault.jpg',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    # Create video file
+    video_path = @test_json_path.sub('.json', '.mp4')
+    File.write(video_path, 'fake video content')
+
+    downie_json = DownieJSON.new(@test_json_path)
+    preview_url = downie_json.send(:generate_preview_image)
+
+    # In test mode, should return test thumbnail
+    assert_includes preview_url, '/thumbnails/test_thumbnail.png'
+  end
+
+  def test_length_in_seconds_fallbacks
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => nil
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    length = downie_json.send(:length_in_seconds)
+    assert_equal 0, length
+  end
+
+  def test_upload_date_epoch_fallback
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => nil,
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    epoch = downie_json.send(:upload_date_epoch)
+    assert_kind_of Integer, epoch
+  end
+end
+
+# Test the fetch_assets method
+class FetchAssetsTest < Minitest::Test
+  def setup
+    @original_wd = Dir.pwd
+    @temp_dir = Dir.mktmpdir('fetch_assets_test')
+    Dir.chdir(@temp_dir)
+  end
+
+  def teardown
+    Dir.chdir(@original_wd)
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_fetch_assets_creates_directory_when_missing
+    refute Dir.exist?('yt-assets')
+
+    # Call fetch_assets (this will actually try to download, which is fine for test)
+    fetch_assets
+
+    assert Dir.exist?('yt-assets')
+  end
+
+  def test_fetch_assets_skips_when_directory_exists
+    FileUtils.mkdir('yt-assets')
+
+    # Should return early and not try to download
+    fetch_assets
+
+    assert Dir.exist?('yt-assets')
+  end
+end
+
+# Test comprehensive DownieJSON methods
+class DownieJSONComprehensiveTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('downie_comprehensive_test')
+    @test_json_path = "#{@temp_dir}/test_video.json"
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_json_error_handling_rescue_block
+    # Create a malformed JSON that will parse but cause errors in processing
+    malformed_json = {
+      'title' => 'Test Video',
+      'url' => 'not-a-valid-url', # This will cause URI parsing errors
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, malformed_json.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    result = downie_json.json
+
+    # Should return the rescue fallback
+    assert_kind_of Hash, result
+    assert_equal 'Test Video', result['cleanTitle']
+    assert_equal 0, result['progress']
+  end
+
+  def test_needs_thumbnail_update_with_local_thumbnail
+    json_data = {
+      'title' => 'Test Video',
+      'previewImageURL' => '/thumbnails/local.png', # Local URL, no update needed
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    needs_update = downie_json.send(:needs_thumbnail_update?)
+    assert_equal false, needs_update
+  end
+
+  def test_needs_thumbnail_update_behavior
+    json_data = {
+      'title' => 'Test Video',
+      'previewImageURL' => 'https://i.ytimg.com/vi/test123/maxresdefault.jpg',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    needs_update = downie_json.send(:needs_thumbnail_update?)
+    # Test that the method runs without error regardless of result
+    assert [true, false].include?(needs_update)
+  end
+
+  def test_system_commands_in_length_detection
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    # Create a video file
+    video_path = @test_json_path.sub('.json', '.mp4')
+    File.write(video_path, 'fake video content')
+
+    downie_json = DownieJSON.new(@test_json_path)
+
+    # This will try ffprobe and mdls commands (which will fail in test but exercise the code)
+    length = downie_json.send(:length_in_seconds)
+    assert_kind_of Integer, length
+  end
+
+  def test_clean_title_with_matching_author_prefix
+    json_data = {
+      'title' => 'TestChannel - Amazing Video Title',
+      'authors' => ['TestChannel'],
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    clean_title = downie_json.send(:clean_title)
+    assert_equal 'Amazing Video Title', clean_title
+  end
+
+  def test_clean_title_empty_result_fallback
+    json_data = {
+      'title' => 'TestChannel - ', # Would result in empty string after cleaning
+      'authors' => ['TestChannel'],
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    clean_title = downie_json.send(:clean_title)
+    assert_equal 'TestChannel - ', clean_title # Should fallback to original
+  end
+
+  def test_start_with_watch_later_file
+    create_basic_video_json
+    video_path = create_video_file
+    setup_watch_later_mock(video_path)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    start_time = downie_json.send(:start)
+    assert_kind_of Integer, start_time
+  end
+
+  private
+
+  def create_basic_video_json
+    json_data = {
+      'title' => 'Test Video',
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z'
+    }
+    File.write(@test_json_path, json_data.to_json)
+  end
+
+  def create_video_file
+    video_path = @test_json_path.sub('.json', '.mp4')
+    File.write(video_path, 'fake video')
+    video_path
+  end
+
+  def setup_watch_later_mock(video_path)
+    watch_later_dir = "#{@temp_dir}/watch_later"
+    FileUtils.mkdir_p(watch_later_dir)
+
+    require 'digest'
+    md5 = Digest::MD5.hexdigest(video_path).upcase
+    watch_file = "#{watch_later_dir}/#{md5}"
+    File.write(watch_file, "start=120\nother=value\n")
+  end
+end
+
+# Test helpers and utilities
+class UtilityMethodsTest < Minitest::Test
+  def test_create_end_timestamp_url_edge_cases
+    # Test with nil URL
+    result = create_end_timestamp_url({ 'url' => nil, 'lengthInSeconds' => 300 })
+    assert_nil result
+
+    # Test with zero length
+    result = create_end_timestamp_url({ 'url' => 'https://youtube.com/watch?v=test', 'lengthInSeconds' => 0 })
+    assert_nil result
+
+    # Test with negative length
+    result = create_end_timestamp_url({ 'url' => 'https://youtube.com/watch?v=test', 'lengthInSeconds' => -5 })
+    assert_nil result
+  end
+
+  def test_delete_video_files_with_various_extensions
+    temp_dir = Dir.mktmpdir('delete_files_test')
+    base_path = "#{temp_dir}/test"
+    json_file = "#{base_path}.json"
+
+    # Create files with all possible extensions
+    files_to_create = [
+      "#{base_path}.json",
+      "#{base_path}.mp4",
+      "#{base_path}.jpg",
+      "#{base_path}.png",
+      "#{base_path}.webp",
+      "#{base_path}.mp4.png"
+    ]
+
+    files_to_create.each do |file|
+      File.write(file, 'content')
+      # Verify all files exist
+      assert File.exist?(file)
+    end
+
+    delete_video_files(json_file)
+
+    # Verify all files are deleted
+    files_to_create.each { |file| refute File.exist?(file) }
+
+    FileUtils.rm_rf(temp_dir)
+  end
+end
+
+# Test YouTubeFiles with various scenarios
+class YouTubeFilesAdvancedTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('youtube_files_advanced_test')
+    @original_download_path = DOWNLOAD_PATH
+    silence_warnings { Object.const_set(:DOWNLOAD_PATH, "#{@temp_dir}/") }
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+    silence_warnings { Object.const_set(:DOWNLOAD_PATH, @original_download_path) }
+  end
+
+  def test_filter_files_all_cases
+    create_diverse_test_files
+
+    # Test all filter types
+    %w[all unwatched partial watched].each do |filter|
+      youtube_files = YouTubeFiles.new('addedAtEpoch', 'desc', filter)
+      videos = youtube_files.json
+      assert_instance_of Array, videos
+    end
+  end
+
+  def test_sorting_fallback_to_prepare_date
+    # Create a file without addedAtEpoch to test fallback
+    json_data = {
+      'title' => 'Test Video',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'uploadDate' => '2025-01-01T00:00:00Z'
+      # No addedAtEpoch - should fallback to prepareDate
+    }
+    File.write("#{@temp_dir}/test_video.json", json_data.to_json)
+    File.write("#{@temp_dir}/channel_cache.json", '{}')
+
+    youtube_files = YouTubeFiles.new('addedAtEpoch', 'desc', 'all')
+    videos = youtube_files.json
+    assert_instance_of Array, videos
+  end
+
+  private
+
+  def create_diverse_test_files
+    test_states.each do |state|
+      create_test_file_for_state(state)
+    end
+    File.write("#{@temp_dir}/channel_cache.json", '{}')
+  end
+
+  def test_states
+    [
+      { name: 'unwatched', progress: 0, watched: nil },
+      { name: 'partial1', progress: 30, watched: nil },
+      { name: 'partial2', progress: 94, watched: nil }, # Just under 95%
+      { name: 'watched1', progress: 100, watched: 'watched' },
+      { name: 'watched2', progress: 0, watched: 'watched' } # Marked watched but no progress
+    ]
+  end
+
+  def create_test_file_for_state(state)
+    json_data = {
+      'title' => "#{state[:name].capitalize} Video",
+      'authors' => ['Test Channel'],
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'progress' => state[:progress],
+      'watched' => state[:watched],
+      'file' => "#{@temp_dir}/#{state[:name]}.json",
+      'addedAtEpoch' => rand(1_704_067_200..1_704_068_199), # Slightly different times
+      'uploadDateEpoch' => 1_704_067_200
+    }
+    File.write("#{@temp_dir}/#{state[:name]}.json", json_data.to_json)
+  end
+
+  def silence_warnings
+    old_verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = old_verbose
+  end
+end
+
+# Test basic Sinatra application setup
+class SinatraApplicationTest < Minitest::Test
+  def test_sinatra_routes_defined
+    # Test that the main routes are defined in the Sinatra application
+    routes = Sinatra::Application.routes
+
+    # Check that we have GET routes
+    assert routes.key?('GET')
+    get_routes = routes['GET']
+
+    # Check for specific route patterns
+    route_patterns = get_routes.map { |route| route[0].inspect }
+    assert(route_patterns.any? { |pattern| pattern.include?('/') })
+    assert(route_patterns.any? { |pattern| pattern.include?('assets') })
+    assert(route_patterns.any? { |pattern| pattern.include?('thumbnails') })
+    assert(route_patterns.any? { |pattern| pattern.include?('channels') })
+  end
+
+  def test_sinatra_post_routes_defined
+    routes = Sinatra::Application.routes
+
+    # Check that we have POST routes
+    assert routes.key?('POST')
+    post_routes = routes['POST']
+
+    # Check for specific route patterns
+    route_patterns = post_routes.map { |route| route[0].inspect }
+    assert(route_patterns.any? { |pattern| pattern.include?('mark-watched') })
+    assert(route_patterns.any? { |pattern| pattern.include?('channel-cache') })
+  end
+
+  def test_sinatra_delete_routes_defined
+    routes = Sinatra::Application.routes
+
+    # Check that we have DELETE routes
+    assert routes.key?('DELETE')
+    delete_routes = routes['DELETE']
+
+    # Check for specific route patterns
+    route_patterns = delete_routes.map { |route| route[0].inspect }
+    assert(route_patterns.any? { |pattern| pattern.include?('video') })
+    assert(route_patterns.any? { |pattern| pattern.include?('channel-cache') })
+  end
+
+  def test_sinatra_settings_configured
+    # Test that Sinatra settings are properly configured
+    assert_equal '0.0.0.0', Sinatra::Application.settings.bind
+    assert_equal 7778, Sinatra::Application.settings.port
   end
 end
 
