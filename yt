@@ -19,7 +19,7 @@ end
 
 DOWNLOAD_PATH = "#{Dir.home}/Downloads/YouTube/"
 CHANNEL_CACHE_FILE = "#{DOWNLOAD_PATH}channel_cache.json"
-END_OF_FILE = DATA.pos.freeze
+END_OF_FILE = defined?(DATA) ? DATA.pos.freeze : 0
 
 # Manages caching of YouTube channel URLs to avoid repeated API lookups
 class ChannelCache
@@ -213,12 +213,16 @@ class DownieJSON
   end
 
   def generate_preview_image
+    return '/thumbnails/test_thumbnail.png' if ENV['YT_TEST_MODE']
+
     `qlmanage -t "#{video_path}" -s 512 -o "#{DOWNLOAD_PATH}"`
     file_name = "#{video_path.gsub(DOWNLOAD_PATH, '')}.png"
     "/thumbnails/#{ERB::Util.url_encode file_name}"
   end
 
   def added_at_epoch
+    return 1_704_067_200 if ENV['YT_TEST_MODE']
+
     added = `GetFileInfo -d "#{file}"`.chomp
     return 0 if added.empty?
 
@@ -352,7 +356,13 @@ set :bind, '0.0.0.0'
 set :port, 7778
 
 get '/' do
-  DATA.pos = END_OF_FILE
+  if defined?(DATA)
+    DATA.pos = END_OF_FILE
+    template = DATA.read.split('@@channels')[0]
+  else
+    template = '<html><body>Test Mode</body></html>'
+  end
+
   videos = YouTubeFiles.new params[:sort], params[:dir], params[:filter]
 
   # Auto-fix any YouTube thumbnail URLs on page load
@@ -369,10 +379,9 @@ get '/' do
                 end
 
     # Generate thumbnail for videos that have YouTube URLs but no local thumbnail
-    `qlmanage -t "#{downie_file.send(:video_path)}" -s 512 -o "#{DOWNLOAD_PATH}"`
+    `qlmanage -t "#{downie_file.send(:video_path)}" -s 512 -o "#{DOWNLOAD_PATH}"` unless ENV['YT_TEST_MODE']
   end
 
-  template = DATA.read.split('@@channels')[0]
   ERB.new(template).result binding
 end
 
@@ -396,9 +405,15 @@ get '/channels' do
     is_search_link = !channel_url.include?('youtube.com/@')
     [is_search_link ? 0 : 1, channel_name.downcase]
   end
-  DATA.pos = END_OF_FILE
-  template = DATA.read
-  channels_template = template[/@@channels\n(.*?)@@end_channels/m, 1]
+
+  if defined?(DATA)
+    DATA.pos = END_OF_FILE
+    template = DATA.read
+    channels_template = template[/@@channels\n(.*?)@@end_channels/m, 1]
+  else
+    channels_template = '<html><body>Channels Test Mode</body></html>'
+  end
+
   ERB.new(channels_template).result binding
 end
 
@@ -447,8 +462,10 @@ unless $CHILD_STATUS.success?
   exit 1
 end
 
-fetch_assets
-Sinatra::Application.run!
+unless ENV['YT_TEST_MODE']
+  fetch_assets
+  Sinatra::Application.run!
+end
 
 __END__
 <!DOCTYPE html>

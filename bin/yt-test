@@ -1,0 +1,314 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require 'bundler/inline'
+
+gemfile do
+  source 'https://rubygems.org'
+
+  gem 'minitest'
+  gem 'simplecov'
+  gem 'json'
+  gem 'tempfile'
+  gem 'fileutils'
+end
+
+require 'simplecov'
+SimpleCov.start do
+  add_filter '/bin/'
+  add_filter '/test/'
+  coverage_dir 'coverage'
+  minimum_coverage 50
+end
+
+require 'minitest/autorun'
+require 'tempfile'
+require 'fileutils'
+require 'json'
+
+# Set test mode to prevent server startup and system commands
+ENV['YT_TEST_MODE'] = 'true'
+
+# Load the main application
+load File.expand_path('../yt', __dir__)
+
+# Test the web application setup
+class YtAppTest < Minitest::Test
+  def test_sinatra_application_defined
+    assert_kind_of Class, Sinatra::Application
+  end
+
+  def test_download_path_constant_defined
+    assert_kind_of String, DOWNLOAD_PATH
+    assert DOWNLOAD_PATH.end_with?('/')
+  end
+
+  def test_channel_cache_file_constant_defined
+    assert_kind_of String, CHANNEL_CACHE_FILE
+    assert CHANNEL_CACHE_FILE.include?('channel_cache.json')
+  end
+
+  def test_test_mode_prevents_server_startup
+    # This test passes if we got here without the server starting
+    assert_equal 'true', ENV.fetch('YT_TEST_MODE', nil)
+  end
+end
+
+# Test the ChannelCache class functionality
+class ChannelCacheTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('channel_cache_test')
+    @cache_file = "#{@temp_dir}/channel_cache.json"
+    @original_cache_file = CHANNEL_CACHE_FILE
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, @cache_file) }
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+    silence_warnings { Object.const_set(:CHANNEL_CACHE_FILE, @original_cache_file) }
+  end
+
+  def test_load_cache_returns_empty_hash_when_file_missing
+    cache = ChannelCache.load_cache
+    assert_equal({}, cache)
+  end
+
+  def test_load_cache_returns_parsed_json_when_file_exists
+    test_data = { 'TestChannel' => 'https://youtube.com/@testchannel' }
+    File.write(@cache_file, test_data.to_json)
+
+    cache = ChannelCache.load_cache
+    assert_equal test_data, cache
+  end
+
+  def test_save_cache_writes_json_to_file
+    test_data = { 'TestChannel' => 'https://youtube.com/@testchannel' }
+    ChannelCache.save_cache(test_data)
+
+    assert File.exist?(@cache_file)
+    saved_data = JSON.parse(File.read(@cache_file))
+    assert_equal test_data, saved_data
+  end
+
+  def test_get_url_returns_cached_url
+    test_data = { 'TestChannel' => 'https://youtube.com/@testchannel' }
+    File.write(@cache_file, test_data.to_json)
+
+    url = ChannelCache.get_url('TestChannel')
+    assert_equal 'https://youtube.com/@testchannel', url
+  end
+
+  def test_set_url_adds_to_cache
+    ChannelCache.set_url('TestChannel', 'https://youtube.com/@testchannel')
+
+    cache = ChannelCache.load_cache
+    assert_equal 'https://youtube.com/@testchannel', cache['TestChannel']
+  end
+
+  private
+
+  def silence_warnings
+    old_verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = old_verbose
+  end
+end
+
+# Test the DownieJSON class functionality
+class DownieJSONTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('downie_test')
+    @test_json_path = "#{@temp_dir}/test_video.json"
+
+    # Create a minimal valid JSON that won't trigger system commands
+    create_minimal_test_json
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+  end
+
+  def test_initialize_creates_downie_json_object
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_instance_of DownieJSON, downie_json
+    assert_equal @test_json_path, downie_json.file
+  end
+
+  def test_file_accessor
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_equal @test_json_path, downie_json.file
+  end
+
+  def test_raw_json_parsing
+    downie_json = DownieJSON.new(@test_json_path)
+    raw_data = downie_json.send(:raw_json)
+    assert_instance_of Hash, raw_data
+    assert_equal 'Test Video', raw_data['title']
+  end
+
+  def test_video_path_returns_correct_mp4_path
+    downie_json = DownieJSON.new(@test_json_path)
+    expected_path = @test_json_path.sub('.json', '.mp4')
+    assert_equal expected_path, downie_json.send(:video_path)
+  end
+
+  def test_clean_title_without_author_prefix
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_equal 'Test Video', downie_json.send(:clean_title)
+  end
+
+  def test_clean_title_removes_author_prefix
+    # Create JSON with author prefix
+    json_data = minimal_json_data.merge({
+                                          'title' => 'Test Channel - Actual Video Title',
+                                          'authors' => ['Test Channel']
+                                        })
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    assert_equal 'Actual Video Title', downie_json.send(:clean_title)
+  end
+
+  def test_youtube_video_detection
+    downie_json = DownieJSON.new(@test_json_path)
+    assert downie_json.send(:youtube_video?)
+  end
+
+  def test_needs_thumbnail_update_false_for_local_urls
+    # Create JSON with local thumbnail URL
+    json_data = minimal_json_data.merge({
+                                          'previewImageURL' => '/thumbnails/local_image.png'
+                                        })
+    File.write(@test_json_path, json_data.to_json)
+
+    downie_json = DownieJSON.new(@test_json_path)
+    refute downie_json.send(:needs_thumbnail_update?)
+  end
+
+  def test_needs_thumbnail_update_detects_youtube_url_with_video_file
+    # Create JSON with YouTube thumbnail URL
+    json_data = minimal_json_data.merge({
+                                          'previewImageURL' => 'https://i.ytimg.com/vi/test123/maxresdefault.jpg'
+                                        })
+    File.write(@test_json_path, json_data.to_json)
+
+    # Create the video file so the condition is met
+    video_path = @test_json_path.sub('.json', '.mp4')
+    File.write(video_path, 'fake_video_data')
+
+    # Test that the system detects this needs updating by checking the behavior
+    # The JSON should get updated during initialization since it has a YouTube URL and video exists
+    DownieJSON.new(@test_json_path)
+
+    # After initialization, the JSON should have been updated to use local thumbnail
+    updated_json = JSON.parse(File.read(@test_json_path))
+    # In test mode, it should now point to the test thumbnail
+    assert_includes updated_json['previewImageURL'], '/thumbnails/'
+    refute_includes updated_json['previewImageURL'], 'ytimg.com'
+  end
+
+  private
+
+  def minimal_json_data
+    {
+      'title' => 'Test Video',
+      'authors' => ['Test Channel'],
+      'previewImageURL' => '/thumbnails/local.png',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'duration' => 300,
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300,
+      'file' => @test_json_path,
+      'addedAtEpoch' => 1_704_067_200,
+      'offlineURL' => 'iina://test',
+      'uploadDateEpoch' => 1_704_067_200,
+      'length' => '5:00'
+    }
+  end
+
+  def create_minimal_test_json
+    File.write(@test_json_path, minimal_json_data.to_json)
+  end
+end
+
+# Test the YouTubeFiles class functionality
+class YouTubeFilesTest < Minitest::Test
+  def setup
+    @temp_dir = Dir.mktmpdir('youtube_files_test')
+    @original_download_path = DOWNLOAD_PATH
+    silence_warnings { Object.const_set(:DOWNLOAD_PATH, "#{@temp_dir}/") }
+
+    create_test_files
+  end
+
+  def teardown
+    FileUtils.rm_rf(@temp_dir)
+    silence_warnings { Object.const_set(:DOWNLOAD_PATH, @original_download_path) }
+  end
+
+  def test_initialize_with_default_params
+    youtube_files = YouTubeFiles.new
+    assert_instance_of YouTubeFiles, youtube_files
+  end
+
+  def test_initialize_with_custom_params
+    youtube_files = YouTubeFiles.new('title', 'asc', 'unwatched')
+    assert_instance_of YouTubeFiles, youtube_files
+  end
+
+  def test_json_returns_array
+    youtube_files = YouTubeFiles.new
+    json_data = youtube_files.json
+    assert_instance_of Array, json_data
+  end
+
+  def test_downie_files_returns_array_of_downie_json_objects
+    youtube_files = YouTubeFiles.new
+    downie_files = youtube_files.downie_files
+    assert_instance_of Array, downie_files
+
+    # Check if any files were found (depends on test setup)
+    return unless downie_files.any?
+
+    assert_instance_of DownieJSON, downie_files.first
+  end
+
+  private
+
+  def create_test_files
+    # Create a simple test JSON file that won't cause hanging
+    json_data = {
+      'title' => 'Test Video',
+      'authors' => ['Test Channel'],
+      'previewImageURL' => '/thumbnails/local.png',
+      'url' => 'https://www.youtube.com/watch?v=test123',
+      'duration' => 300,
+      'uploadDate' => '2025-01-01T00:00:00Z',
+      'prepareDate' => '2025-01-01T00:00:00Z',
+      'lengthInSeconds' => 300,
+      'file' => "#{@temp_dir}/test_video.json",
+      'addedAtEpoch' => 1_704_067_200,
+      'offlineURL' => 'iina://test',
+      'uploadDateEpoch' => 1_704_067_200,
+      'length' => '5:00'
+    }
+
+    File.write("#{@temp_dir}/test_video.json", json_data.to_json)
+    # Create channel cache file to avoid issues
+    File.write("#{@temp_dir}/channel_cache.json", '{}')
+  end
+
+  def silence_warnings
+    old_verbose = $VERBOSE
+    $VERBOSE = nil
+    yield
+  ensure
+    $VERBOSE = old_verbose
+  end
+end
+
+# Run the tests
+puts 'Running yt application tests with coverage...'

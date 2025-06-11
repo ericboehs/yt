@@ -23,18 +23,26 @@ end
 doc = Nokogiri::HTML(File.read(coverage_file))
 
 # Extract overall line coverage
-line_percent = doc.css('.covered_percent .green').first&.text&.strip
+line_percent = doc.css('.covered_percent span').first&.text&.strip
 total_lines = doc.css('.t-line-summary b').first&.text&.strip
 covered_lines = doc.css('.t-line-summary .green b').first&.text&.strip
 missed_lines = doc.css('.t-line-summary .red b').first&.text&.strip
 
 # Extract overall branch coverage (first t-branch-summary is the overall stats)
 overall_branch_summary = doc.css('.t-branch-summary').first
-branch_percent = overall_branch_summary.css('span').last.text.strip.gsub(/[()]/, '')
-branch_summary_spans = overall_branch_summary.css('span b')
-total_branches = branch_summary_spans[0]&.text&.strip
-covered_branches = branch_summary_spans[1]&.text&.strip
-missed_branches = branch_summary_spans[2]&.text&.strip
+if overall_branch_summary
+  branch_percent = overall_branch_summary.css('span').last.text.strip.gsub(/[()]/, '')
+  branch_summary_spans = overall_branch_summary.css('span b')
+  total_branches = branch_summary_spans[0]&.text&.strip
+  covered_branches = branch_summary_spans[1]&.text&.strip
+  missed_branches = branch_summary_spans[2]&.text&.strip
+else
+  # No branch coverage available
+  branch_percent = nil
+  total_branches = nil
+  covered_branches = nil
+  missed_branches = nil
+end
 
 # Extract timestamp
 timestamp = doc.css('.timestamp .timeago').first&.attr('title')
@@ -48,13 +56,15 @@ puts "  ✅ #{covered_lines}/#{total_lines} lines covered"
 puts "  ❌ #{missed_lines} lines missed"
 puts ''
 
-puts "### 🌳 Branch Coverage: #{branch_percent}"
-puts "  ✅ #{covered_branches}/#{total_branches} branches covered"
-puts "  ❌ #{missed_branches} branches missed"
-puts ''
+if branch_percent
+  puts "### 🌳 Branch Coverage: #{branch_percent}"
+  puts "  ✅ #{covered_branches}/#{total_branches} branches covered"
+  puts "  ❌ #{missed_branches} branches missed"
+  puts ''
+end
 
 # Show file-by-file breakdown if there are missed lines or branches
-if missed_lines.to_i.positive? || missed_branches.to_i.positive?
+if missed_lines.to_i.positive? || (missed_branches && missed_branches.to_i.positive?)
   puts '### 📋 Files with missing coverage:'
   puts ''
 
@@ -66,7 +76,7 @@ if missed_lines.to_i.positive? || missed_branches.to_i.positive?
     file_link = row.css('.t-file__name a').first&.attr('href')
 
     # Only show files that aren't 100% covered and haven't been shown yet
-    next unless !files_shown.include?(file_name) && (line_coverage != '100.00 %' || branch_coverage != '100.00 %')
+    next unless !files_shown.include?(file_name) && (line_coverage != '100.00 %' || (branch_coverage && branch_coverage != '100.00 %'))
 
     files_shown.add(file_name)
 
@@ -150,7 +160,8 @@ if missed_lines.to_i.positive? || missed_branches.to_i.positive?
       end
     end
 
-    puts "  #{file_name} (Line: #{line_coverage}, Branch: #{branch_coverage}):"
+    branch_display = branch_coverage ? "Branch: #{branch_coverage}" : "Branch: N/A"
+    puts "  #{file_name} (Line: #{line_coverage}, #{branch_display}):"
 
     line_info = "📍 Lines: #{covered_file_lines}/#{total_file_lines}"
     line_info += " (missed: #{format_line_ranges(missed_lines)})" unless missed_lines.empty?

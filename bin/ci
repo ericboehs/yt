@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# frozen_string_literal: true
+
+set -e
+
+echo "🚀 Running CI pipeline..."
+echo
+
+echo "📝 Running editorconfig-checker..."
+editorconfig-checker
+echo "✅ editorconfig-checker passed"
+echo
+
+echo "🔍 Running rubocop on main code..."
+rubocop
+echo "✅ rubocop passed"
+echo
+
+echo "🔍 Running rubocop on test code..."
+rubocop bin/yt-test
+echo "✅ rubocop bin/yt-test passed"
+echo
+
+echo "🧪 Running tests with coverage..."
+bin/yt-test
+echo "✅ tests passed"
+echo
+
+echo "📊 Generating coverage report..."
+bin/coverage
+echo "✅ coverage report generated"
+echo
+
+echo "🎉 All CI checks passed!"
