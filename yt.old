@@ -1,0 +1,412 @@
+#! /usr/bin/env ruby
+
+# Eric's Offline YouTube (Download YT videos via Downie with JSON metadata and image previews and then run this script)
+
+require 'bundler/inline'
+
+puts `echo $PATH`
+
+gemfile do
+  source 'https://rubygems.org'
+
+  gem 'json'
+  gem 'pry'
+  gem 'puma'
+  gem 'sinatra'
+  gem 'rackup'
+end
+
+DOWNLOAD_PATH = "#{ENV['HOME']}/Downloads/YouTube/".freeze
+END_OF_FILE = DATA.pos.freeze
+
+class DownieJSON
+  attr_reader :file
+
+  def initialize(file)
+    @file = file
+    update_json unless raw_json['lengthInSeconds']
+  end
+
+  def json
+    @json ||= raw_json.merge(
+      'progress' => progress,
+      'url' => url
+    )
+  end
+
+  def marked_watched
+    File.write file, raw_json.merge(
+      'watched' => 'watched'
+    ).to_json, encoding: 'UTF-8'
+  end
+
+  def launch_iina
+    `open "#{offline_url}"`
+  end
+
+  private
+
+  def progress
+    (start / raw_json['lengthInSeconds'].to_f * 100).to_i
+  rescue StandardError
+    0
+  end
+
+  def start
+    md5_of_file_path = Digest::MD5.hexdigest video_path
+    watch_later_path = '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
+    watch_later_file = "#{watch_later_path}/#{md5_of_file_path.upcase}"
+    return 0 unless File.exist? watch_later_file
+
+    File.readlines(watch_later_file).grep(/start=/).first&.chomp&.split('=')&.last.to_i
+  end
+
+  def update_json
+    File.write file, raw_json.merge(
+      'file' => file,
+      'addedAtEpoch' => added_at_epoch,
+      'offlineURL' => offline_url,
+      'previewImageURL' => preview_image_url,
+      'uploadDateEpoch' => upload_date_epoch,
+      'length' => length,
+      'lengthInSeconds' => length_in_seconds
+    ).to_json, encoding: 'UTF-8'
+  end
+
+  def url
+    return unless raw_json['url']
+
+    uri = URI.parse raw_json['url']
+    return unless uri.query
+
+    query = URI.decode_www_form(uri.query).to_h
+    query['t'] = start
+    uri.query = URI.encode_www_form query
+    uri.to_s
+  end
+
+  def length
+    return raw_json['length'] if raw_json['length']
+
+    duration = `mdls "#{file.sub(/\.[^.]+$/, '.mp4')}" | grep Duration`.chomp
+    seconds = duration.split('= ').last.to_i
+    Time.at(seconds).utc.strftime(seconds < 3600 ? '%M:%S' : '%H:%M:%S')
+  end
+
+  def length_in_seconds
+    return raw_json['lengthInSeconds'] if raw_json['lengthInSeconds']
+
+    duration = `mdls "#{file.sub(/\.[^.]+$/, '.mp4')}" | grep Duration`.chomp
+    duration.split('= ').last.to_i
+  end
+
+  def raw_json
+    JSON.parse file_contents
+  end
+
+  def offline_url
+    return "iina://open?url=#{ERB::Util.url_encode video_path}" if File.exist? video_path
+
+    ERB::Util.url_encode raw_json['url']
+  end
+
+  def video_path
+    file.sub(/\.[^.]+$/, '.mp4')
+  end
+
+  def preview_image_url
+    # Check for various image formats
+    %w[.jpg .png .webp .mp4.png].each do |ext|
+      expected_path = ext == '.mp4.png' ? video_path + '.png' : file.sub(/\.[^.]+$/, ext)
+      if File.exist? expected_path
+        return "/thumbnails/#{ERB::Util.url_encode expected_path.gsub DOWNLOAD_PATH, ''}"
+      end
+    end
+
+    raw_json['previewImageURL'] || generate_preview_image
+  end
+
+  def generate_preview_image
+    `qlmanage -t "#{video_path}" -s 512 -o "#{DOWNLOAD_PATH}"`
+    file_name = video_path.gsub(DOWNLOAD_PATH, '') + '.png'
+    "/thumbnails/#{ERB::Util.url_encode file_name}"
+  end
+
+  def added_at_epoch
+    added = `GetFileInfo -d "#{file}"`.chomp
+    return 0 if added.empty?
+
+    time = Time.strptime added, '%m/%d/%Y %H:%M:%S'
+    time.to_i
+  end
+
+  def upload_date_epoch
+    date = Date.parse raw_json['uploadDate'] || raw_json['prepareDate']
+    date.to_time.to_i
+  end
+
+  def file_contents
+    File.read file, encoding: 'UTF-8'
+  end
+end
+
+class YouTubeFiles
+  def initialize(sort = nil)
+    @sort = sort || 'addedAtEpoch'
+  end
+
+  def json
+    downie_files.map { |df| df.json }
+  end
+
+  def downie_files
+    json_files
+      .map { |file| DownieJSON.new(file) }
+      .sort_by { |item| item.json[@sort] || item.json['prepareDate'] }
+      .reverse
+  end
+
+  def json_files
+    Dir["#{DOWNLOAD_PATH}*.json"]
+  end
+end
+
+set :bind, '0.0.0.0'
+set :port, 7777
+
+get '/' do
+  DATA.pos = END_OF_FILE
+  videos = YouTubeFiles.new params[:sort]
+  ERB.new(DATA.read).result binding
+end
+
+get '/launch' do
+  video = DownieJSON.new(params[:file])
+  video.launch_iina
+  redirect '/'
+end
+
+get '/watched' do
+  video = DownieJSON.new(params[:file])
+  video.marked_watched
+  redirect "#{video.json['url'].gsub '&t=0', ''}&t=#{video.json['lengthInSeconds'].to_i - 10}"
+end
+
+get '/assets/:file' do
+  send_file "#{Dir.pwd}/yt-assets/#{params[:file]}", disposition: 'inline'
+end
+
+get '/thumbnails/:file' do
+  send_file "#{DOWNLOAD_PATH}#{params[:file]}", disposition: 'inline'
+end
+
+get '/delete' do
+  video = DownieJSON.new(params[:file])
+  video.marked_watched
+  url = video.json['url']
+  length = video.json['lengthInSeconds']
+
+  file = params[:file]
+  if file.start_with? DOWNLOAD_PATH
+    file = File.basename file, File.extname(file)
+    FileUtils.rm Dir["#{File.join DOWNLOAD_PATH, file}*"]
+  end
+
+  redirect "#{url.gsub '&t=0', ''}&t=#{length.to_i - 10}"
+end
+
+def fetch_assets
+  return if Dir.exist? 'yt-assets'
+
+  FileUtils.mkdir 'yt-assets'
+  `cd yt-assets; curl -O https://cdn.jsdelivr.net/npm/uikit@3.10.1/dist/css/uikit.min.css`
+  `cd yt-assets; curl -O https://cdn.jsdelivr.net/npm/uikit@3.10.1/dist/js/uikit.min.js`
+  `cd yt-assets; curl -O https://cdn.jsdelivr.net/npm/uikit@3.10.1/dist/js/uikit-icons.min.js`
+end
+
+`which iina`
+unless $?.success?
+  warn 'IINA not found. Please run `brew install --cask iina` to proceed.'
+  exit 1
+end
+
+fetch_assets
+Sinatra::Application.run!
+
+__END__
+<title>Eric's Offline YouTube</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' class='h-5 w-5' viewBox='0 0 20 20' fill='red'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z' clip-rule='evenodd' /%3E%3C/svg%3E" type="image/svg+xml" />
+<link rel="stylesheet" href="./assets/uikit.min.css" />
+<script src="./assets/uikit.min.js"></script>
+<script src="./assets/uikit-icons.min.js"></script>
+
+<style>
+  .line-clamp {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .uk-progress {
+    border-radius: 0;
+    height: 5px !important;
+  }
+
+  .uk-progress::-webkit-progress-value {
+    border-radius: 0;
+    background-color: red !important
+  }
+</style>
+
+<div class="uk-flex uk-flex-center uk-margin-top" uk-grid="">
+  <div class="uk-width-1-6 uk-flex uk-flex-middle uk-flex-right">
+  </div>
+  <div class="uk-width-1-2">
+    <nav class="uk-navbar-container" uk-navbar>
+      <form class="uk-search uk-search-navbar uk-navbar-item" style="width: 100% !important">
+        <span uk-search-icon></span>
+        <input class="uk-search-input" type="search" placeholder="Search" autofocus="true" style="height: 100% !important">
+        <div class="uk-width-small">
+          <%= `ls ~/Downloads/YouTube/*.mp4 | wc -l` %> videos /
+            <%= `du -h ~/Downloads/YouTube/ | tail -1 | awk '{print $1}'` %>
+        </div>
+      </form>
+    </nav>
+  </div>
+  <div class="uk-width-1-6 uk-flex uk-flex-middle">
+    <a href="https://www.youtube.com" target="_blank" uk-icon="icon: youtube; ratio: 2"></a>
+  </div>
+</div>
+<div class="uk-flex uk-flex-center uk-flex-wrap uk-flex-wrap-around uk-margin-top" uk-margin="margin: uk-margin-small-top">
+  <% videos.json.each do |video| %>
+    <div class="uk-card uk-card-hover uk-width-1-6@m uk-margin-left">
+      <div class="uk-visible-toggle uk-inline">
+        <a href="launch?file=<%= ERB::Util.url_encode video['file'] %>" class="iina-launch">
+          <div class="uk-inline uk-light">
+          <img src="<%= video['previewImageURL'] || 'https://via.placeholder.com/300x168?text=No+Thumbnail' %>" width="300" class="<%= video['watched'].nil? || video['watched']&.empty? ? 'unwatched' : 'watched' %>" />
+            <div class="uk-position-center uk-invisible-hover">
+              <span uk-icon="icon: play-circle; ratio: 3"></span>
+            </div>
+            <span class="uk-label uk-position-bottom-right uk-margin-small-bottom uk-margin-small-right uk-light" style="background-color: #111; color: #FFF"><%= video['length'] %></span>
+              <% progress_value = 100 if video['watched'] %>
+              <% progress_value ||= video['progress'] %>
+            <progress id="js-progressbar" class="uk-progress uk-position-bottom uk-margin-remove" value="<%= progress_value %>" max="100"></progress>
+          </div>
+        </a>
+      </div>
+      <div class="uk-margin-small-left uk-margin-small-right uk-margin-small-bottom">
+        <div class="uk-grid uk-grid-small uk-flex-middle">
+          <div class="uk-margin-auto uk-width-expand">
+            <a href="<%= video['url'] %>" class="uk-button uk-button-text">
+              <h3 class="uk-h5 uk-margin-remove-bottom uk-text-left line-clamp"><%= video['title'] %></h3>
+            </a>
+            <div class="uk-text-meta uk-margin-small-top uk-child-width-expand@s uk-text-center uk-grid uk-grid-small">
+              <span><%= video['authors']&.join ', ' %></span>
+              <time class="ago" datetime="<%= video['uploadDateEpoch'] %>"><%= video['uploadDate'] %></time>
+              <div>
+                <a href="watched?file=<%= ERB::Util.url_encode video['file'] %>" target="_blank" class="uk-button uk-button-text" uk-icon="icon: check"></a>
+                <a href="delete?file=<%= ERB::Util.url_encode video['file'] %>"  target="_blank" class="uk-button uk-button-text delete" uk-icon="icon: trash"></a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% end %>
+</div>
+
+<!-- Time ago -->
+<script>
+  function timeSince(date) {
+    var seconds = Math.floor(((new Date().getTime()/1000) - date)), interval = Math.floor(seconds / 31536000)
+
+    if (interval > 1) return interval + " years"
+
+    interval = Math.floor(seconds / 2592000)
+    if (interval > 1) return interval + " months"
+
+    interval = Math.floor(seconds / 86400)
+    return interval + " days"
+  }
+
+  function setTimeAgos() {
+    Array.from(document.querySelectorAll('time.ago')).forEach((time) => {
+      var text = timeSince(time.dateTime) + ' ago'
+      text = text.replace('0 days ago', 'Today')
+      text = text.replace('1 days ago', 'Yesterday')
+      time.textContent = text
+    })
+  }
+
+  setTimeAgos()
+  setInterval(setTimeAgos, 10000)
+</script>
+
+<!-- Launch IINA -->
+<script>
+  function launchIina(url) {
+    var request = new XMLHttpRequest()
+    request.open('GET', url, true)
+    request.send()
+  }
+
+  Array.from(document.querySelectorAll('a.iina-launch')).forEach((launchLinks) => {
+    launchLinks.addEventListener('click', function (e) {
+      launchIina(this.href)
+      e.preventDefault()
+    }, false)
+  })
+</script>
+
+<!-- WIP: Update page on focus -->
+<script>
+  function replaceElements() {
+    var request = new XMLHttpRequest()
+    request.open('GET', window.location.href, true)
+    request.onload = function() {
+      if (this.status >= 200 && this.status < 400) {
+        var shadow = document.createElement('div')
+        shadow.innerHTML = this.responseText
+        debugger
+        document.querySelector('.uk-card').parentElement.replaceWith(shadow.querySelector('.uk-card').parentElement)
+        document.querySelectorAll('script:not([src])').forEach((elem) => elem.remove())
+        shadow.querySelectorAll('script:not([src])').forEach((elem) => document.body.appendChild(elem))
+      }
+    }
+
+    request.send()
+  }
+
+  window.addEventListener('focus', function(event) {
+    // replaceElements()
+  }, false)
+</script>
+
+<!-- Hide Deleted Videos -->
+<script>
+  Array.from(document.querySelectorAll('a.delete')).forEach((deleteLinks) => {
+    deleteLinks.addEventListener('click', function (e) {
+      this.parentElement.parentElement.parentElement.parentElement.parentElement.parentElement.remove()
+    }, false)
+  })
+</script>
+
+<!-- Search -->
+<script>
+  function filterVideos(query) {
+    Array.from(document.querySelectorAll('.uk-card')).forEach((video) => {
+      titleMatches = video.querySelector('h3').textContent.toLowerCase().includes(query)
+      channelMatches = video.querySelector('.uk-text-meta span').textContent.toLowerCase().includes(query)
+      video.hidden = !titleMatches && !channelMatches
+    })
+  }
+
+  document.querySelector('.uk-search-input').addEventListener('input', function (e) {
+    filterVideos(this.value.toLowerCase())
+    e.preventDefault()
+  })
+
+  document.querySelector('form').addEventListener('submit', event => { event.preventDefault() } )
+</script>
