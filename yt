@@ -4,6 +4,7 @@
 # Eric's Offline YouTube (Download YT videos via Downie with JSON metadata and image previews and then run this script)
 
 require 'English'
+require 'fileutils'
 require 'bundler/inline'
 
 gemfile do
@@ -449,6 +450,75 @@ delete '/channel-cache/:channel_name' do
   redirect '/channels'
 end
 
+post '/mark-watched' do
+  content_type :json
+  file_path = params[:file]
+
+  unless file_path && File.exist?(file_path)
+    status 400
+    return { error: 'File not found' }.to_json
+  end
+
+  downie_json = DownieJSON.new(file_path)
+  raw_json = downie_json.send(:raw_json)
+
+  # Get YouTube URL with timestamp at the end
+  youtube_url_with_timestamp = create_end_timestamp_url(raw_json)
+
+  # Mark as watched locally
+  downie_json.marked_watched
+
+  response = { success: true }
+  response[:youtube_url] = youtube_url_with_timestamp if youtube_url_with_timestamp
+  response.to_json
+end
+
+delete '/video' do
+  content_type :json
+  file_path = params[:file]
+
+  unless file_path && File.exist?(file_path)
+    status 400
+    return { error: 'File not found' }.to_json
+  end
+
+  downie_json = DownieJSON.new(file_path)
+  raw_json = downie_json.send(:raw_json)
+
+  # Get YouTube URL with timestamp at the end
+  youtube_url_with_timestamp = create_end_timestamp_url(raw_json)
+
+  # Delete all files
+  delete_video_files(file_path)
+
+  response = { success: true }
+  response[:youtube_url] = youtube_url_with_timestamp if youtube_url_with_timestamp
+  response.to_json
+end
+
+def create_end_timestamp_url(raw_json)
+  youtube_url = raw_json['url']
+  length_in_seconds = raw_json['lengthInSeconds'] || 0
+
+  return nil unless youtube_url && length_in_seconds.positive?
+
+  separator = youtube_url.include?('?') ? '&' : '?'
+  "#{youtube_url}#{separator}t=#{length_in_seconds - 5}"
+end
+
+def delete_video_files(file_path)
+  video_path = file_path.sub(/\.json$/, '.mp4')
+  thumbnail_patterns = %w[.jpg .png .webp .mp4.png]
+
+  File.delete(file_path)
+  FileUtils.rm_f(video_path)
+
+  thumbnail_patterns.each do |ext|
+    thumb_path = ext == '.mp4.png' ? "#{video_path}.png" : file_path.sub(/\.json$/, ext)
+    FileUtils.rm_f(thumb_path)
+  end
+end
+
 def fetch_assets
   return if Dir.exist? 'yt-assets'
 
@@ -531,10 +601,10 @@ __END__
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Videos</h2>
         <div class="flex items-center space-x-6">
           <div class="flex items-center space-x-2">
-            <span class="text-sm text-gray-600 dark:text-gray-400 font-sans">Sort by:</span>
-            <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
-              <option class="font-sans" value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Recently Downloaded</option>
-              <option class="font-sans" value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Recently Created</option>
+            <span class="text-sm text-gray-600 dark:text-gray-400">Sort by:</span>
+            <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer">
+              <option value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Recently Downloaded</option>
+              <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Recently Created</option>
             </select>
             <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -550,12 +620,12 @@ __END__
           </div>
 
           <div class="flex items-center space-x-2">
-            <span class="text-sm text-gray-600 dark:text-gray-400 font-sans">Filter:</span>
-            <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
-              <option class="font-sans" value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All Videos</option>
-              <option class="font-sans" value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
-              <option class="font-sans" value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partially Played</option>
-              <option class="font-sans" value="watched" <%= 'selected' if params[:filter] == 'watched' %>>Watched</option>
+            <span class="text-sm text-gray-600 dark:text-gray-400">Filter:</span>
+            <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer">
+              <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All Videos</option>
+              <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
+              <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partially Played</option>
+              <option value="watched" <%= 'selected' if params[:filter] == 'watched' %>>Watched</option>
             </select>
             <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
@@ -565,7 +635,7 @@ __END__
       </div>
 
       <div class="text-sm text-gray-500 dark:text-gray-400">
-        Showing <%= videos&.json&.length || 0 %> videos
+        Showing <span id="video-count"><%= videos&.json&.length || 0 %></span> videos
       </div>
     </div>
   </div>
@@ -574,16 +644,18 @@ __END__
   <main class="px-6 py-8">
     <div id="video-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
       <% (videos&.json || []).each do |video| %>
-        <div class="video-card group bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors shadow-lg">
+        <div class="video-card bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors shadow-lg">
           <!-- Thumbnail -->
-          <div class="relative aspect-video bg-gray-200 dark:bg-gray-700">
+          <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 group">
             <img src="<%= video['previewImageURL'] %>"
               alt="<%= video['title'] %>"
               class="w-full h-full object-cover <%= video['watched'].nil? || video['watched']&.empty? ? '' : 'opacity-60' %>">
 
             <!-- Play Button Overlay -->
-            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity" style="background-color: rgba(0, 0, 0, 0.6);">
-              <svg class="w-16 h-16 text-white" fill="currentColor" viewBox="0 0 24 24">
+            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer play-button"
+                style="background-color: rgba(0, 0, 0, 0.6);"
+                data-iina-url="<%= video['offlineURL'] %>">
+              <svg class="w-16 h-16 text-white pointer-events-none" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M8 5v14l11-7z"/>
               </svg>
             </div>
@@ -603,7 +675,9 @@ __END__
           <!-- Video Info -->
           <div class="p-4">
             <h3 class="video-title text-base font-medium line-clamp-2 mb-2 text-gray-900 dark:text-white">
-              <%= video['cleanTitle'] || video['title'] %>
+              <a href="<%= video['url'] %>" target="_blank" class="hover:text-red-500 transition-colors">
+                <%= video['cleanTitle'] || video['title'] %>
+              </a>
             </h3>
             <div class="text-sm text-gray-600 dark:text-gray-400 space-y-2">
               <div class="video-author">
@@ -620,8 +694,12 @@ __END__
                   <%= video['uploadDate'] %>
                 </time>
                 <div class="flex space-x-3">
-                  <button class="hover:text-green-500 text-lg" title="Mark watched">✓</button>
-                  <button class="hover:text-red-500 text-lg" title="Delete">🗑</button>
+                  <button class="hover:text-green-500 text-lg mark-watched-btn cursor-pointer" title="Mark watched" data-file="<%= ERB::Util.url_encode(video['file']) %>">✓</button>
+                  <button class="hover:text-red-500 text-lg delete-btn cursor-pointer" title="Delete" data-file="<%= ERB::Util.url_encode(video['file']) %>">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                    </svg>
+                  </button>
                 </div>
               </div>
             </div>
@@ -656,11 +734,13 @@ __END__
     searchInput.addEventListener('input', (e) => {
       const query = e.target.value.toLowerCase().trim();
       const fallbackText = document.getElementById('fallback-text');
+      const videoCountEl = document.getElementById('video-count');
 
       if (!query) {
         // Show all videos when search is empty
         videoCards.forEach(card => card.style.display = 'block');
         youtubeFallback.classList.add('hidden');
+        videoCountEl.textContent = videoCards.length;
         return;
       }
 
@@ -676,7 +756,9 @@ __END__
         if (matches) visibleCount++;
       });
 
-      // Update YouTube fallback link and text
+      // Update video count
+      videoCountEl.textContent = visibleCount;
+
       // Update YouTube fallback link and text
       youtubeFallback.classList.remove('hidden');
       youtubeSearchLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
@@ -741,6 +823,79 @@ __END__
         currentParams.set('filter', filterBy);
       }
       window.location.search = currentParams.toString();
+    });
+
+    // Play button functionality
+    document.querySelectorAll('.play-button').forEach(button => {
+      button.addEventListener('click', function() {
+        const iinaUrl = this.getAttribute('data-iina-url');
+        if (iinaUrl) {
+          window.location.href = iinaUrl;
+        }
+      });
+    });
+
+    // Mark watched functionality
+    document.querySelectorAll('.mark-watched-btn').forEach(button => {
+      button.addEventListener('click', function() {
+        const filePath = decodeURIComponent(this.getAttribute('data-file'));
+
+        fetch('/mark-watched', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'file=' + encodeURIComponent(filePath)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // If we have a YouTube URL, open it to mark as watched on YouTube
+            if (data.youtube_url) {
+              window.open(data.youtube_url, '_blank');
+            }
+            // Reload the page to update the UI
+            location.reload();
+          } else {
+            alert('Error marking video as watched: ' + data.error);
+          }
+        })
+        .catch(error => {
+          alert('Error marking video as watched: ' + error);
+        });
+      });
+    });
+
+    // Delete functionality
+    document.querySelectorAll('.delete-btn').forEach(button => {
+      button.addEventListener('click', function() {
+        const filePath = decodeURIComponent(this.getAttribute('data-file'));
+        const videoCard = this.closest('.video-card');
+
+        fetch('/video', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'file=' + encodeURIComponent(filePath)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // If we have a YouTube URL, open it to mark as watched on YouTube
+            if (data.youtube_url) {
+              window.open(data.youtube_url, '_blank');
+            }
+            // Remove the video card from the UI
+            videoCard.remove();
+          } else {
+            alert('Error deleting video: ' + data.error);
+          }
+        })
+        .catch(error => {
+          alert('Error deleting video: ' + error);
+        });
+      });
     });
   </script>
 </body>
