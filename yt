@@ -6,6 +6,7 @@
 require 'English'
 require 'fileutils'
 require 'bundler/inline'
+require 'digest'
 
 gemfile do
   source 'https://rubygems.org'
@@ -366,22 +367,8 @@ get '/' do
 
   videos = YouTubeFiles.new params[:sort], params[:dir], params[:filter]
 
-  # Auto-fix any YouTube thumbnail URLs on page load
-  videos.downie_files.each do |downie_file|
-    next unless downie_file.send(:raw_json)['previewImageURL']&.include?('ytimg.com') &&
-                File.exist?(downie_file.send(:video_path)) &&
-                %w[.jpg .png .webp .mp4.png].none? do |ext|
-                  expected_path = if ext == '.mp4.png'
-                                    "#{downie_file.send(:video_path)}.png"
-                                  else
-                                    downie_file.file.sub(/\.[^.]+$/, ext)
-                                  end
-                  File.exist? expected_path
-                end
-
-    # Generate thumbnail for videos that have YouTube URLs but no local thumbnail
-    `qlmanage -t "#{downie_file.send(:video_path)}" -s 512 -o "#{DOWNLOAD_PATH}"` unless ENV['YT_TEST_MODE']
-  end
+  # NOTE: Auto-thumbnail generation moved to avoid page load interference
+  # Thumbnails are now generated on-demand in the preview_image_url method
 
   ERB.new(template).result binding
 end
@@ -394,9 +381,48 @@ get '/thumbnails/:file' do
   send_file "#{DOWNLOAD_PATH}#{params[:file]}", disposition: 'inline'
 end
 
+get '/video-file/:file' do
+  file_path = "#{DOWNLOAD_PATH}#{params[:file]}"
+
+  # Security check - ensure file is in download directory and exists
+  unless file_path.start_with?(DOWNLOAD_PATH) && File.exist?(file_path)
+    status 404
+    return 'Video file not found'
+  end
+
+  # Set proper content type for video files
+  content_type 'video/mp4'
+  send_file file_path, disposition: 'inline'
+end
+
 get '/channel-cache' do
   content_type :json
   ChannelCache.load_cache.to_json
+end
+
+get '/video' do
+  file_path = params[:file]
+
+  # Security check - ensure file is in download directory
+  unless file_path&.start_with?(DOWNLOAD_PATH) && File.exist?(file_path)
+    status 404
+    return 'Video not found'
+  end
+
+  downie_json = DownieJSON.new(file_path)
+  @video = downie_json.json
+  @video_file_exists = File.exist?(@video['file'].sub('.json', '.mp4'))
+  @start_time = downie_json.send(:start)
+
+  if defined?(DATA)
+    DATA.pos = END_OF_FILE
+    template = DATA.read
+    show_template = template[/@@show\n(.*?)@@end_show/m, 1]
+  else
+    show_template = '<html><body>Show Test Mode</body></html>'
+  end
+
+  ERB.new(show_template).result binding
 end
 
 get '/channels' do
@@ -441,6 +467,76 @@ post '/check-channel/:channel_name' do
 
   url = downie_json.check_and_cache_channel_url(channel_name)
   { channel_name: channel_name, url: url }.to_json
+end
+
+def sync_to_iina_watch_later(file_path, current_time)
+  video_path = file_path.sub('.json', '.mp4')
+  md5_of_file_path = Digest::MD5.hexdigest(video_path)
+  watch_later_path = '/Users/ericboehs/Library/Application Support/com.colliderli.iina/watch_later'
+  watch_later_file = "#{watch_later_path}/#{md5_of_file_path.upcase}"
+
+  if File.exist?(watch_later_path)
+    File.write(watch_later_file, "start=#{current_time}\n")
+  else
+    FileUtils.mkdir_p(watch_later_path)
+    File.write(watch_later_file, "start=#{current_time}\n") if File.exist?(watch_later_path)
+  end
+rescue StandardError
+  # Silently fail if we can't write to IINA files
+end
+
+def update_youtube_url_timestamp(youtube_url, current_time)
+  uri = URI.parse(youtube_url)
+  if uri.query
+    query = URI.decode_www_form(uri.query).to_h
+    query['t'] = current_time
+    uri.query = URI.encode_www_form(query)
+  else
+    uri.query = "t=#{current_time}"
+  end
+  uri.to_s
+end
+
+def handle_progress_sync(file_path, params)
+  downie_json = DownieJSON.new(file_path)
+  raw_json = downie_json.send(:raw_json)
+
+  if params[:web_progress] && params[:web_time]
+    current_time = params[:web_time].to_i
+    sync_to_iina_watch_later(file_path, current_time)
+    current_progress = params[:web_progress].to_i
+  else
+    current_progress = downie_json.send(:progress)
+  end
+
+  updated_json = raw_json.merge('progress' => current_progress)
+  if params[:web_time] && raw_json['url']
+    updated_json['url'] = update_youtube_url_timestamp(raw_json['url'], params[:web_time].to_i)
+  end
+
+  File.write(file_path, updated_json.to_json, encoding: 'UTF-8')
+  [current_progress, updated_json, raw_json]
+end
+
+post '/sync-progress' do
+  content_type :json
+  file_path = params[:file]
+
+  unless file_path && File.exist?(file_path)
+    status 400
+    return { error: 'File not found' }.to_json
+  end
+
+  begin
+    current_progress, updated_json, raw_json = handle_progress_sync(file_path, params)
+
+    response = { success: true, progress: current_progress }
+    response[:youtube_url] = updated_json['url'] if updated_json['url'] != raw_json['url']
+    response.to_json
+  rescue StandardError => e
+    status 500
+    { error: "Failed to sync progress: #{e.message}" }.to_json
+  end
 end
 
 delete '/channel-cache/:channel_name' do
@@ -561,6 +657,12 @@ __END__
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
+    .line-clamp-3 {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
   </style>
 </head>
 <body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
@@ -607,7 +709,7 @@ __END__
         <div class="flex items-center space-x-6">
           <div class="flex items-center space-x-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Sort by:</span>
-            <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer">
+            <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
               <option value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Recently Downloaded</option>
               <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Recently Created</option>
             </select>
@@ -626,7 +728,7 @@ __END__
 
           <div class="flex items-center space-x-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Filter:</span>
-            <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer">
+            <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
               <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All Videos</option>
               <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
               <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partially Played</option>
@@ -649,18 +751,18 @@ __END__
   <main class="px-6 py-8">
     <div id="video-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
       <% (videos&.json || []).each do |video| %>
-        <div class="video-card bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-750 transition-colors shadow-lg">
+        <div class="video-card bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-lg">
           <!-- Thumbnail -->
-          <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 group">
-            <img src="<%= video['previewImageURL'] %>"
-              alt="<%= video['title'] %>"
-              class="w-full h-full object-cover <%= video['watched'].nil? || video['watched']&.empty? ? '' : 'opacity-60' %>">
+          <div class="relative aspect-video bg-white dark:bg-gray-100 group">
+            <a href="/video?file=<%= ERB::Util.url_encode(video['file']) %>" class="block w-full h-full">
+              <img src="<%= video['previewImageURL'] %>"
+                alt="<%= video['title'] %>"
+                class="w-full h-full object-cover <%= video['watched'].nil? || video['watched']&.empty? ? '' : 'opacity-60' %>">
+            </a>
 
-            <!-- Play Button Overlay -->
-            <div class="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer play-button"
-                style="background-color: rgba(0, 0, 0, 0.6);"
-                data-iina-url="<%= video['offlineURL'] %>">
-              <svg class="w-16 h-16 text-white pointer-events-none" fill="currentColor" viewBox="0 0 24 24">
+            <!-- Hover overlay -->
+            <div class="absolute inset-0 bg-black opacity-0 group-hover:opacity-60 transition-opacity duration-200 pointer-events-none z-10 flex items-center justify-center">
+              <svg class="w-16 h-16 text-white opacity-0 group-hover:opacity-90 transition-opacity duration-200" fill="currentColor" viewBox="0 0 24 24">
                 <path d="M8 5v14l11-7z"/>
               </svg>
             </div>
@@ -680,7 +782,7 @@ __END__
           <!-- Video Info -->
           <div class="p-4">
             <h3 class="video-title text-base font-medium line-clamp-2 mb-2 text-gray-900 dark:text-white">
-              <a href="<%= video['url'] %>" target="_blank" class="hover:text-red-500 transition-colors">
+              <a href="/video?file=<%= ERB::Util.url_encode(video['file']) %>" class="hover:text-red-500 transition-colors">
                 <%= video['cleanTitle'] || video['title'] %>
               </a>
             </h3>
@@ -699,6 +801,11 @@ __END__
                   <%= video['uploadDate'] %>
                 </time>
                 <div class="flex space-x-3">
+                  <button class="hover:text-blue-500 text-lg iina-play-btn cursor-pointer" title="Play in IINA" data-iina-url="<%= video['offlineURL'] %>">
+                    <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M8 6.82v10.36c0 .79.87 1.27 1.54.84l8.14-5.18c.62-.39.62-1.29 0-1.68L9.54 5.98C8.87 5.55 8 6.03 8 6.82z"/>
+                    </svg>
+                  </button>
                   <button class="hover:text-green-500 text-lg mark-watched-btn cursor-pointer" title="Mark watched" data-file="<%= ERB::Util.url_encode(video['file']) %>">✓</button>
                   <button class="hover:text-red-500 text-lg delete-btn cursor-pointer" title="Delete" data-file="<%= ERB::Util.url_encode(video['file']) %>">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -711,19 +818,29 @@ __END__
           </div>
         </div>
       <% end %>
-    </div>
 
-    <!-- YouTube Search Fallback -->
-    <div id="youtube-fallback" class="hidden mt-12 text-center">
-      <div class="bg-gray-100 dark:bg-gray-800 rounded-lg p-6 max-w-md mx-auto">
-        <p id="fallback-text" class="text-gray-600 dark:text-gray-400 mb-4">Search on YouTube for more videos</p>
-        <a id="youtube-search-link" href="https://www.youtube.com/results?search_query=" target="_blank"
-          class="inline-flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
-          <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+      <!-- YouTube Search Card -->
+      <div id="youtube-search-card" class="video-card bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-lg border-2 border-dashed border-gray-300 dark:border-gray-600 hidden">
+        <!-- YouTube Icon Thumbnail -->
+        <div class="relative aspect-video bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
+          <svg class="w-20 h-20 text-red-500" fill="currentColor" viewBox="0 0 24 24">
             <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
           </svg>
-          Search on YouTube
-        </a>
+        </div>
+
+        <!-- Card Info -->
+        <div class="p-4 text-center">
+          <h3 class="text-base font-medium mb-2 text-gray-900 dark:text-white">
+            <span id="youtube-card-text">Search on YouTube for more videos</span>
+          </h3>
+          <a id="youtube-search-link" href="https://www.youtube.com/results?search_query=" target="_blank"
+            class="inline-flex items-center px-3 py-2 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg transition-colors">
+            <svg class="w-4 h-4 mr-2" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+            </svg>
+            Search on YouTube
+          </a>
+        </div>
       </div>
     </div>
   </main>
@@ -732,19 +849,19 @@ __END__
     // Search functionality
     const searchInput = document.getElementById('search-input');
     const videoGrid = document.getElementById('video-grid');
-    const youtubeFallback = document.getElementById('youtube-fallback');
+    const youtubeSearchCard = document.getElementById('youtube-search-card');
     const youtubeSearchLink = document.getElementById('youtube-search-link');
-    const videoCards = document.querySelectorAll('.video-card');
+    const videoCards = document.querySelectorAll('.video-card:not(#youtube-search-card)');
 
     searchInput.addEventListener('input', (e) => {
       const query = e.target.value.toLowerCase().trim();
-      const fallbackText = document.getElementById('fallback-text');
+      const youtubeCardText = document.getElementById('youtube-card-text');
       const videoCountEl = document.getElementById('video-count');
 
       if (!query) {
         // Show all videos when search is empty
         videoCards.forEach(card => card.style.display = 'block');
-        youtubeFallback.classList.add('hidden');
+        youtubeSearchCard.classList.add('hidden');
         videoCountEl.textContent = videoCards.length;
         return;
       }
@@ -764,14 +881,14 @@ __END__
       // Update video count
       videoCountEl.textContent = visibleCount;
 
-      // Update YouTube fallback link and text
-      youtubeFallback.classList.remove('hidden');
+      // Show YouTube search card and update link
+      youtubeSearchCard.classList.remove('hidden');
       youtubeSearchLink.href = `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`;
 
       if (visibleCount === 0) {
-        fallbackText.textContent = 'No videos found in your collection.';
+        youtubeCardText.textContent = 'No videos found in your collection.';
       } else {
-        fallbackText.textContent = `Search "${query}" on YouTube for more videos`;
+        youtubeCardText.textContent = `Search "${query}" on YouTube for more videos`;
       }
     });
 
@@ -795,6 +912,15 @@ __END__
           timeEl.textContent = timeAgo(timestamp);
         }
       });
+    }
+
+    // Handle search parameter from URL (when coming from show view)
+    const urlParams = new URLSearchParams(window.location.search);
+    const searchParam = urlParams.get('search');
+    if (searchParam) {
+      searchInput.value = searchParam;
+      // Trigger the search
+      searchInput.dispatchEvent(new Event('input'));
     }
 
     // Update relative times on load and every minute
@@ -830,9 +956,11 @@ __END__
       window.location.search = currentParams.toString();
     });
 
-    // Play button functionality
-    document.querySelectorAll('.play-button').forEach(button => {
-      button.addEventListener('click', function() {
+    // IINA play button functionality
+    document.querySelectorAll('.iina-play-btn').forEach(button => {
+      button.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
         const iinaUrl = this.getAttribute('data-iina-url');
         if (iinaUrl) {
           window.location.href = iinaUrl;
@@ -1076,3 +1204,598 @@ __END__
 </body>
 </html>
 @@end_channels
+
+@@show
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= @video['cleanTitle'] || @video['title'] %> - Offline YouTube</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' class='h-5 w-5' viewBox='0 0 20 20' fill='red'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z' clip-rule='evenodd' /%3E%3C/svg%3E" type="image/svg+xml" />
+  <script src="./assets/tailwind-browser.js"></script>
+</head>
+<body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
+  <!-- Header -->
+  <header class="bg-gray-100 dark:bg-gray-800 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
+    <div class="flex items-center justify-between">
+      <div class="flex items-center space-x-4">
+        <h1 class="text-xl font-bold text-red-500">
+          <a href="/">Offline YouTube</a>
+        </h1>
+        <span class="text-sm text-gray-600 dark:text-gray-400">Video Player</span>
+      </div>
+
+      <!-- Search Bar -->
+      <div class="max-w-xl flex-1 mx-8">
+        <div class="relative">
+          <input id="show-search-input" type="text" placeholder="Search videos..."
+            class="w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white px-4 py-2 pl-10 rounded-full focus:outline-none focus:ring-2 focus:ring-red-500 border border-gray-300 dark:border-gray-600">
+          <svg class="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+        </div>
+      </div>
+
+      <div class="flex items-center space-x-4">
+        <a href="/channels" class="text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors text-sm">
+          Manage Channels
+        </a>
+        <a href="https://www.youtube.com" target="_blank" class="text-red-500 hover:text-red-400">
+          <svg class="w-8 h-8" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+          </svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <!-- Video Player Section -->
+  <div id="video-container" class="w-full max-w-4xl mx-auto px-6 pt-4 pb-2 mb-4 transition-all duration-300">
+    <div class="relative">
+      <% if @video_file_exists %>
+        <div class="relative aspect-video bg-black rounded-lg overflow-hidden">
+          <video
+            id="main-video"
+            controls
+            autoplay
+            muted
+            preload="metadata"
+            class="w-full h-full"
+            src="/video-file/<%= ERB::Util.url_encode(@video['file'].sub('.json', '.mp4').sub(DOWNLOAD_PATH, '')) %>"
+            poster="<%= @video['previewImageURL'] %>"
+            data-start-time="<%= @start_time %>">
+            Your browser does not support the video tag.
+          </video>
+        </div>
+      <% else %>
+        <div class="relative aspect-video bg-gray-200 dark:bg-gray-700 rounded-lg overflow-hidden flex items-center justify-center">
+          <img src="<%= @video['previewImageURL'] %>" alt="<%= @video['title'] %>" class="w-full h-full object-cover">
+          <div class="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50">
+            <p class="text-white text-lg">Video file not found</p>
+          </div>
+        </div>
+      <% end %>
+
+    </div>
+  </div>
+
+  <main class="max-w-5xl mx-auto px-6 pt-2 pb-8">
+    <!-- Video Title -->
+    <div class="mb-6">
+      <h1 class="text-2xl font-bold text-gray-900 dark:text-white">
+        <%= @video['cleanTitle'] || @video['title'] %>
+      </h1>
+    </div>
+
+    <!-- Video Controls -->
+    <div class="flex flex-wrap gap-4 mb-6">
+      <button class="flex items-center px-4 py-2 bg-blue-600 hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600 text-white rounded-lg transition-colors iina-play-btn"
+              data-iina-url="<%= @video['offlineURL'] %>" title="Play in IINA">
+        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M8 6.82v10.36c0 .79.87 1.27 1.54.84l8.14-5.18c.62-.39.62-1.29 0-1.68L9.54 5.98C8.87 5.55 8 6.03 8 6.82z"/>
+        </svg>
+        Play in IINA
+      </button>
+
+      <a href="<%= @video['url'] %>" target="_blank"
+        class="flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white rounded-lg transition-colors">
+        <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+        </svg>
+        View on YouTube
+      </a>
+
+      <button class="flex items-center px-4 py-2 bg-green-600 hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600 text-white rounded-lg transition-colors mark-watched-btn"
+              data-file="<%= ERB::Util.url_encode(@video['file']) %>" title="Mark as watched">
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+        </svg>
+        Mark Watched
+      </button>
+
+      <button class="flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white rounded-lg transition-colors delete-btn"
+              data-file="<%= ERB::Util.url_encode(@video['file']) %>" title="Delete video">
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+        </svg>
+        Delete
+      </button>
+    </div>
+
+    <!-- Video Info -->
+    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg">
+      <% if @video['description'] && !@video['description'].empty? %>
+        <div class="mb-6">
+          <h3 class="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Description</h3>
+          <div class="text-sm text-gray-700 dark:text-gray-300">
+            <div id="description-preview" class="whitespace-pre-wrap line-clamp-3 overflow-hidden">
+              <%= @video['description']&.strip %>
+            </div>
+            <div id="description-full" class="whitespace-pre-wrap hidden">
+              <%= @video['description']&.strip %>
+            </div>
+            <% if @video['description'].lines.count > 3 || @video['description'].length > 200 %>
+              <button id="description-toggle" class="text-red-500 hover:text-red-400 text-sm mt-2 transition-colors">
+                Show more
+              </button>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div>
+          <h3 class="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Details</h3>
+          <dl class="space-y-2">
+            <div>
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Channel</dt>
+              <dd class="text-sm text-gray-900 dark:text-white">
+                <% if @video['channelUrl'] %>
+                  <a href="<%= @video['channelUrl'] %>" target="_blank" class="hover:text-red-500 transition-colors">
+                    <%= @video['authors']&.join(', ') %>
+                  </a>
+                <% else %>
+                  <%= @video['authors']&.join(', ') %>
+                <% end %>
+              </dd>
+            </div>
+            <div>
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Duration</dt>
+              <dd class="text-sm text-gray-900 dark:text-white"><%= @video['length'] %></dd>
+            </div>
+            <div>
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Upload Date</dt>
+              <dd class="text-sm text-gray-900 dark:text-white">
+                <time class="relative-time" datetime="<%= @video['uploadDateEpoch'] %>" title="<%= Time.at(@video['uploadDateEpoch']).strftime('%B %d, %Y at %I:%M %p CT') if @video['uploadDateEpoch'] %>">
+                  Uploaded
+                </time>
+              </dd>
+            </div>
+            <div>
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Watch Status</dt>
+              <dd class="text-sm">
+                <% if @video['watched'] && !@video['watched'].empty? %>
+                  <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                    Watched
+                  </span>
+                <% else %>
+                  <% progress = @video['progress'] || 0 %>
+                  <% if progress > 0 %>
+                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                      <%= progress %>% watched
+                    </span>
+                  <% else %>
+                    <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-800 dark:bg-gray-900 dark:text-gray-200">
+                      Unwatched
+                    </span>
+                  <% end %>
+                <% end %>
+              </dd>
+            </div>
+          </dl>
+        </div>
+
+        <div>
+          <h3 class="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Progress</h3>
+          <% progress_value = @video['watched'] ? 100 : (@video['progress'] || 0) %>
+          <div class="mb-4">
+            <div class="flex justify-between text-sm text-gray-600 dark:text-gray-400 mb-1">
+              <span>Progress</span>
+              <span><%= progress_value %>%</span>
+            </div>
+            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
+              <div class="bg-red-500 h-2 rounded-full transition-all duration-300" style="width: <%= progress_value %>%"></div>
+            </div>
+          </div>
+
+          <% if @video_file_exists %>
+            <p class="text-sm text-green-600 dark:text-green-400 flex items-center">
+              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+              </svg>
+              Video file available
+            </p>
+          <% else %>
+            <p class="text-sm text-red-600 dark:text-red-400 flex items-center">
+              <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+              </svg>
+              Video file not found
+            </p>
+          <% end %>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // Get the video element for keyboard controls
+    const videoElement = document.querySelector('video');
+
+    // Set video start time on load
+    if (videoElement) {
+      const startTime = parseInt(videoElement.getAttribute('data-start-time')) || 0;
+
+      videoElement.addEventListener('loadedmetadata', function() {
+        if (startTime > 0) {
+          videoElement.currentTime = startTime;
+        }
+        // Unmute after setting start time to allow autoplay
+        videoElement.muted = false;
+      });
+    }
+
+    // Add keyboard controls for video player
+    if (videoElement) {
+      document.addEventListener('keydown', function(e) {
+        // Only handle arrow keys when video is focused or when no input element is focused
+        const activeElement = document.activeElement;
+        const isInputFocused = activeElement && (
+          activeElement.tagName === 'INPUT' ||
+          activeElement.tagName === 'TEXTAREA' ||
+          activeElement.contentEditable === 'true'
+        );
+
+        if (!isInputFocused) {
+          switch(e.key) {
+            case 'ArrowLeft':
+              e.preventDefault();
+              videoElement.currentTime = Math.max(0, videoElement.currentTime - 10);
+              break;
+            case 'ArrowRight':
+              e.preventDefault();
+              videoElement.currentTime = Math.min(videoElement.duration, videoElement.currentTime + 10);
+              break;
+            case ' ':
+            case 'k':
+              e.preventDefault();
+              if (videoElement.paused) {
+                videoElement.play();
+              } else {
+                videoElement.pause();
+              }
+              break;
+            case 't':
+            case 'T':
+              e.preventDefault();
+              // Toggle theater mode
+              const theaterToggleBtn = document.getElementById('theater-toggle');
+              if (theaterToggleBtn) {
+                theaterToggleBtn.click();
+              }
+              break;
+          }
+        }
+      });
+    }
+
+    // IINA play button functionality
+    document.querySelectorAll('.iina-play-btn').forEach(button => {
+      button.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const iinaUrl = this.getAttribute('data-iina-url');
+        if (iinaUrl) {
+          window.location.href = iinaUrl;
+        }
+      });
+    });
+
+    // Mark watched functionality
+    document.querySelectorAll('.mark-watched-btn').forEach(button => {
+      button.addEventListener('click', function() {
+        const filePath = decodeURIComponent(this.getAttribute('data-file'));
+
+        fetch('/mark-watched', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'file=' + encodeURIComponent(filePath)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // If we have a YouTube URL, open it to mark as watched on YouTube
+            if (data.youtube_url) {
+              window.open(data.youtube_url, '_blank');
+            }
+            // Reload the page to update the UI
+            location.reload();
+          } else {
+            alert('Error marking video as watched: ' + data.error);
+          }
+        })
+        .catch(error => {
+          alert('Error marking video as watched: ' + error);
+        });
+      });
+    });
+
+    // Delete functionality
+    document.querySelectorAll('.delete-btn').forEach(button => {
+      button.addEventListener('click', function() {
+        if (!confirm('Are you sure you want to delete this video? This action cannot be undone.')) {
+          return;
+        }
+
+        const filePath = decodeURIComponent(this.getAttribute('data-file'));
+
+        fetch('/video', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+          },
+          body: 'file=' + encodeURIComponent(filePath)
+        })
+        .then(response => response.json())
+        .then(data => {
+          if (data.success) {
+            // If we have a YouTube URL, open it to mark as watched on YouTube
+            if (data.youtube_url) {
+              window.open(data.youtube_url, '_blank');
+            }
+            // Redirect back to the main page
+            window.location.href = '/';
+          } else {
+            alert('Error deleting video: ' + data.error);
+          }
+        })
+        .catch(error => {
+          alert('Error deleting video: ' + error);
+        });
+      });
+    });
+
+    // Theater mode toggle functionality
+    const theaterToggle = document.getElementById('theater-toggle');
+    const videoContainer = document.getElementById('video-container');
+    const theaterIcon = document.getElementById('theater-icon');
+    const normalIcon = document.getElementById('normal-icon');
+
+    if (theaterToggle && videoContainer) {
+      // Load saved theater mode preference
+      const isTheaterMode = localStorage.getItem('theaterMode') === 'true';
+      if (isTheaterMode) {
+        enableTheaterMode();
+      }
+
+      theaterToggle.addEventListener('click', function() {
+        const isCurrentlyTheater = videoContainer.classList.contains('w-4/5');
+
+        if (isCurrentlyTheater) {
+          disableTheaterMode();
+        } else {
+          enableTheaterMode();
+        }
+      });
+
+      function enableTheaterMode() {
+        videoContainer.classList.remove('w-full', 'max-w-4xl');
+        videoContainer.classList.add('w-4/5');
+        theaterIcon.classList.add('hidden');
+        normalIcon.classList.remove('hidden');
+        localStorage.setItem('theaterMode', 'true');
+      }
+
+      function disableTheaterMode() {
+        videoContainer.classList.remove('w-4/5');
+        videoContainer.classList.add('w-full', 'max-w-4xl');
+        theaterIcon.classList.remove('hidden');
+        normalIcon.classList.add('hidden');
+        localStorage.setItem('theaterMode', 'false');
+      }
+    }
+
+    // IINA progress sync functionality
+    const currentFilePath = '<%= ERB::Util.url_encode(@video["file"]) %>';
+    let progressSyncInterval;
+
+    function syncProgressWithIINA() {
+      fetch('/sync-progress', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'file=' + encodeURIComponent(decodeURIComponent(currentFilePath))
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success && data.progress !== undefined) {
+          // Update progress bar if it exists
+          const progressBar = document.querySelector('.bg-red-500');
+          if (progressBar) {
+            const progressValue = Math.min(100, Math.max(0, data.progress));
+            progressBar.style.width = progressValue + '%';
+
+            // Update progress text
+            const progressText = document.querySelector('.bg-red-500').closest('.w-full').previousElementSibling;
+            if (progressText && progressText.querySelector('span:last-child')) {
+              progressText.querySelector('span:last-child').textContent = progressValue + '%';
+            }
+          }
+        }
+      })
+      .catch(error => {
+        console.log('Progress sync failed:', error);
+      });
+    }
+
+    // Start progress sync when video is playing in the web player
+    if (videoElement) {
+      videoElement.addEventListener('play', function() {
+        // Sync immediately when play starts
+        syncProgressWithIINA();
+
+        // Then sync every 30 seconds while playing
+        if (progressSyncInterval) {
+          clearInterval(progressSyncInterval);
+        }
+        progressSyncInterval = setInterval(syncProgressWithIINA, 30000);
+      });
+
+      videoElement.addEventListener('pause', function() {
+        // Stop syncing when paused
+        if (progressSyncInterval) {
+          clearInterval(progressSyncInterval);
+        }
+      });
+
+      videoElement.addEventListener('ended', function() {
+        // Final sync when video ends
+        syncProgressWithIINA();
+        if (progressSyncInterval) {
+          clearInterval(progressSyncInterval);
+        }
+      });
+    }
+
+    // Convert timestamps to relative time
+    function timeAgo(timestamp) {
+      const now = Math.floor(Date.now() / 1000);
+      const diff = now - timestamp;
+
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.floor(diff / 60) + ' minutes ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + ' hours ago';
+      if (diff < 2592000) return Math.floor(diff / 86400) + ' days ago';
+      if (diff < 31536000) return Math.floor(diff / 2592000) + ' months ago';
+      return Math.floor(diff / 31536000) + ' years ago';
+    }
+
+    function updateRelativeTimes() {
+      document.querySelectorAll('.relative-time').forEach(timeEl => {
+        const timestamp = parseInt(timeEl.getAttribute('datetime'));
+        if (timestamp) {
+          timeEl.textContent = 'Uploaded ' + timeAgo(timestamp);
+        }
+      });
+    }
+
+    // Update relative times on load and every minute
+    updateRelativeTimes();
+    setInterval(updateRelativeTimes, 60000);
+
+    // Sync progress from web player to IINA metadata files
+    function syncProgressToIINA() {
+      if (!videoElement || videoElement.duration === 0) return;
+
+      const currentProgress = Math.round((videoElement.currentTime / videoElement.duration) * 100);
+
+      fetch('/sync-progress', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: 'file=' + encodeURIComponent(decodeURIComponent(currentFilePath)) + '&web_progress=' + currentProgress + '&web_time=' + Math.floor(videoElement.currentTime)
+      })
+      .then(response => response.json())
+      .then(data => {
+        if (data.success) {
+          // Update progress bar if it exists
+          const progressBar = document.querySelector('.bg-red-500');
+          if (progressBar) {
+            progressBar.style.width = currentProgress + '%';
+
+            // Update progress text
+            const progressText = document.querySelector('.bg-red-500').closest('.w-full').previousElementSibling;
+            if (progressText && progressText.querySelector('span:last-child')) {
+              progressText.querySelector('span:last-child').textContent = currentProgress + '%';
+            }
+          }
+
+          // Update YouTube link with new timestamp if provided
+          if (data.youtube_url) {
+            const youtubeLink = document.querySelector('a[href*="youtube.com"]');
+            if (youtubeLink) {
+              youtubeLink.href = data.youtube_url;
+            }
+          }
+        }
+      })
+      .catch(error => {
+        console.log('Progress sync failed:', error);
+      });
+    }
+
+    // Also sync when page loads (in case IINA was used outside the web app)
+    syncProgressWithIINA();
+
+    // Sync web player progress to IINA more frequently
+    if (videoElement) {
+      // Sync on play/pause events
+      videoElement.addEventListener('play', syncProgressToIINA);
+      videoElement.addEventListener('pause', syncProgressToIINA);
+      videoElement.addEventListener('ended', syncProgressToIINA);
+
+      // Sync every 10 seconds during playback
+      videoElement.addEventListener('timeupdate', function() {
+        if (!videoElement._lastSyncTime || Date.now() - videoElement._lastSyncTime > 10000) {
+          syncProgressToIINA();
+          videoElement._lastSyncTime = Date.now();
+        }
+      });
+    }
+
+    // Description toggle functionality
+    const descriptionToggle = document.getElementById('description-toggle');
+    const descriptionPreview = document.getElementById('description-preview');
+    const descriptionFull = document.getElementById('description-full');
+
+    if (descriptionToggle && descriptionPreview && descriptionFull) {
+      descriptionToggle.addEventListener('click', function() {
+        if (descriptionFull.classList.contains('hidden')) {
+          // Show full description
+          descriptionPreview.classList.add('hidden');
+          descriptionFull.classList.remove('hidden');
+          descriptionToggle.textContent = 'Show less';
+        } else {
+          // Show preview
+          descriptionFull.classList.add('hidden');
+          descriptionPreview.classList.remove('hidden');
+          descriptionToggle.textContent = 'Show more';
+        }
+      });
+    }
+
+    // Search functionality - redirect to index with search query
+    const showSearchInput = document.getElementById('show-search-input');
+    if (showSearchInput) {
+      showSearchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          const query = e.target.value.trim();
+          if (query) {
+            // Redirect to index with search query in URL fragment for the search script to pick up
+            window.location.href = `/?search=${encodeURIComponent(query)}`;
+          } else {
+            // Just go to index if empty search
+            window.location.href = '/';
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
+@@end_show

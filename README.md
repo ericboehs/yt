@@ -5,13 +5,15 @@ A self-hosted web application for managing and viewing offline YouTube videos do
 ## Features
 
 - 🎬 **Offline Video Management** - Browse and play locally downloaded YouTube videos
-- 🔍 **Smart Search & Filtering** - Search by title/author, filter by watch status
-- 🖼️ **Thumbnail Generation** - Automatic thumbnail creation for local videos
-- ▶️ **IINA Integration** - One-click video playback with progress tracking
-- 📊 **Watch Progress** - Visual progress bars and watch status tracking
-- 🔗 **YouTube Integration** - Mark videos as watched on YouTube for algorithm tracking
-- 📱 **Responsive Design** - Clean, modern interface with dark mode support
-- 🗂️ **Channel Management** - Automatic channel URL resolution and caching
+- 🔍 **Smart Search & Filtering** - Real-time search by title/author, filter by watch status
+- 🖼️ **Interactive Thumbnails** - Hover overlays with play icons and automatic thumbnail generation
+- ▶️ **IINA Integration** - Seamless video playback with bidirectional progress sync
+- 📊 **Progress Tracking** - Visual progress bars with real-time sync between web and IINA
+- 🔗 **YouTube Integration** - Mark videos as watched, sync timestamps, maintain algorithm tracking
+- 📱 **Responsive Design** - Clean, modern Netflix-style interface with full dark mode support
+- 🗂️ **Channel Management** - Automatic channel URL resolution and intelligent caching
+- 🎭 **Theater Mode** - Immersive fullscreen viewing with persistent preferences
+- 📝 **Rich Descriptions** - Collapsible video descriptions with proper formatting
 
 ## Screenshots
 
@@ -50,11 +52,13 @@ The app will automatically install required Ruby gems and start the web server a
 
 ### Video Management
 
-- **Play Videos**: Click the play button overlay on thumbnails
+- **Play Videos**: Click thumbnails or use hover overlay play button to start videos
+- **Theater Mode**: Toggle fullscreen viewing with T key or theater button
+- **Progress Sync**: Seamless progress tracking between web player and IINA
 - **Mark as Watched**: Click the ✓ button (also opens YouTube at video end)
 - **Delete Videos**: Click the trash icon (opens YouTube at video end and deletes files)
-- **Search**: Use the search bar to filter by title or channel name
-- **Filter**: Sort by download date or upload date, filter by watch status
+- **Search**: Real-time search from any page, with YouTube fallback suggestions
+- **Filter**: Sort by download/upload date, filter by watch status (unwatched/partial/watched)
 
 ### Channel Management
 
@@ -106,11 +110,14 @@ The repository includes pre-commit hooks that automatically run the CI pipeline:
 
 ## API Endpoints
 
-- `GET /` - Main video grid interface
+- `GET /` - Main video grid interface with search and filtering
+- `GET /video` - Individual video player view with theater mode
 - `GET /channels` - Channel management interface
-- `POST /mark-watched` - Mark video as watched
+- `POST /sync-progress` - Bidirectional progress sync between web player and IINA
+- `POST /mark-watched` - Mark video as watched (with YouTube timestamp)
 - `DELETE /video` - Delete video and associated files
 - `GET /thumbnails/:file` - Serve thumbnail images
+- `GET /video-file/:file` - Serve video files for web playback
 
 ## Contributing
 
