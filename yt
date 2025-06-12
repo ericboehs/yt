@@ -339,7 +339,7 @@ end
 # Manages collection of YouTube video files with sorting and filtering capabilities
 class YouTubeFiles
   def initialize(sort = nil, direction = nil, filter = nil)
-    @sort = sort || 'addedAtEpoch'
+    @sort = sort || 'downloadedAt'
     @direction = direction || 'desc'
     @filter = filter || 'all'
   end
@@ -350,17 +350,25 @@ class YouTubeFiles
 
   def downie_files
     files = json_files.map { |file| DownieJSON.new(file) }
-
-    # Apply filter
     files = filter_files(files) if @filter != 'all'
-
-    # Apply sort
-    sorted = files.sort_by { |item| item.json[@sort] || item.json['prepareDate'] }
-
+    sorted = files.sort_by { |item| sort_value_for(item) }
     @direction == 'asc' ? sorted : sorted.reverse
   end
 
   private
+
+  def sort_value_for(item)
+    case @sort
+    when 'downloadedAt'
+      # Use prepareDate from JSON (actual download time), fallback to file creation time
+      item.json['prepareDate'] ? Time.parse(item.json['prepareDate']) : File.birthtime(item.file)
+    when 'recentlyPlayed'
+      # Use file modification time (when metadata was last updated)
+      File.mtime(item.file)
+    else
+      item.json[@sort] || item.json['prepareDate']
+    end
+  end
 
   def filter_files(files)
     files.select { |video| matches_filter?(video) }
@@ -809,18 +817,19 @@ __END__
       <div class="flex items-center space-x-3">
         <div class="flex items-center space-x-1">
           <span class="text-xs text-gray-600 dark:text-gray-200">Sort:</span>
-          <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
-            <option value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Downloaded</option>
+          <select id="sort-select-mobile" class="sort-select form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
+            <option value="downloadedAt" <%= 'selected' if params[:sort] == 'downloadedAt' || params[:sort].nil? %>>Downloaded</option>
+            <option value="recentlyPlayed" <%= 'selected' if params[:sort] == 'recentlyPlayed' %>>Played</option>
             <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Created</option>
           </select>
           <svg class="w-3 h-3 text-gray-500 dark:text-gray-200 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
           </svg>
-          <button id="sort-direction" class="ml-1 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
-            <svg id="sort-asc" class="w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <button id="sort-direction-mobile" class="sort-direction ml-1 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
+            <svg class="sort-asc w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
             </svg>
-            <svg id="sort-desc" class="w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' unless params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg class="sort-desc w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' unless params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4"/>
             </svg>
           </button>
@@ -828,7 +837,7 @@ __END__
 
         <div class="flex items-center space-x-1">
           <span class="text-xs text-gray-600 dark:text-gray-200">Filter:</span>
-          <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
+          <select id="filter-select-mobile" class="filter-select form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
             <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All</option>
             <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
             <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partial</option>
@@ -848,18 +857,19 @@ __END__
         <div class="flex items-center space-x-6">
           <div class="flex items-center space-x-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Sort by:</span>
-            <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
-              <option value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Recently Downloaded</option>
+            <select id="sort-select-desktop" class="sort-select form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
+              <option value="downloadedAt" <%= 'selected' if params[:sort] == 'downloadedAt' || params[:sort].nil? %>>Recently Downloaded</option>
+              <option value="recentlyPlayed" <%= 'selected' if params[:sort] == 'recentlyPlayed' %>>Recently Played</option>
               <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Recently Created</option>
             </select>
             <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
             </svg>
-            <button id="sort-direction" class="ml-2 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
-              <svg id="sort-asc" class="w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <button id="sort-direction-desktop" class="sort-direction ml-2 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
+              <svg class="sort-asc w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
               </svg>
-              <svg id="sort-desc" class="w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' unless params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="sort-desc w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' unless params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4"/>
               </svg>
             </button>
@@ -867,7 +877,7 @@ __END__
 
           <div class="flex items-center space-x-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Filter:</span>
-            <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
+            <select id="filter-select-desktop" class="filter-select form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
               <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All Videos</option>
               <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
               <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partially Played</option>
@@ -1085,32 +1095,38 @@ __END__
     setInterval(updateRelativeTimes, 60000);
 
     // Sort functionality
-    document.getElementById('sort-select').addEventListener('change', function() {
-      const sortBy = this.value;
-      const currentParams = new URLSearchParams(window.location.search);
-      currentParams.set('sort', sortBy);
-      window.location.search = currentParams.toString();
+    document.querySelectorAll('.sort-select').forEach(function(element) {
+      element.addEventListener('change', function() {
+        const sortBy = this.value;
+        const currentParams = new URLSearchParams(window.location.search);
+        currentParams.set('sort', sortBy);
+        window.location.search = currentParams.toString();
+      });
     });
 
     // Sort direction toggle
-    document.getElementById('sort-direction').addEventListener('click', function() {
-      const currentParams = new URLSearchParams(window.location.search);
-      const currentDir = currentParams.get('dir') || 'desc';
-      const newDir = currentDir === 'desc' ? 'asc' : 'desc';
-      currentParams.set('dir', newDir);
-      window.location.search = currentParams.toString();
+    document.querySelectorAll('.sort-direction').forEach(function(element) {
+      element.addEventListener('click', function() {
+        const currentParams = new URLSearchParams(window.location.search);
+        const currentDir = currentParams.get('dir') || 'desc';
+        const newDir = currentDir === 'desc' ? 'asc' : 'desc';
+        currentParams.set('dir', newDir);
+        window.location.search = currentParams.toString();
+      });
     });
 
     // Filter functionality
-    document.getElementById('filter-select').addEventListener('change', function() {
-      const filterBy = this.value;
-      const currentParams = new URLSearchParams(window.location.search);
-      if (filterBy === 'all') {
-        currentParams.delete('filter');
-      } else {
-        currentParams.set('filter', filterBy);
-      }
-      window.location.search = currentParams.toString();
+    document.querySelectorAll('.filter-select').forEach(function(element) {
+      element.addEventListener('change', function() {
+        const filterBy = this.value;
+        const currentParams = new URLSearchParams(window.location.search);
+        if (filterBy === 'all') {
+          currentParams.delete('filter');
+        } else {
+          currentParams.set('filter', filterBy);
+        }
+        window.location.search = currentParams.toString();
+      });
     });
 
     // IINA play button functionality
@@ -1823,11 +1839,8 @@ __END__
 
       // Initial auto-hide
       showTheaterButton();
-      // Load saved theater mode preference
-      const isTheaterMode = localStorage.getItem('theaterMode') === 'true';
-      if (isTheaterMode) {
-        enableTheaterMode();
-      }
+      // Always start in theater mode
+      enableTheaterMode();
 
       theaterToggle.addEventListener('click', function() {
         const isCurrentlyTheater = videoContainer.classList.contains('w-4/5');
