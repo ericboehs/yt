@@ -1332,7 +1332,7 @@ class SinatraApplicationTest < Minitest::Test
   def test_sinatra_settings_configured
     # Test that Sinatra settings are properly configured
     assert_equal '0.0.0.0', Sinatra::Application.settings.bind
-    assert_equal 7778, Sinatra::Application.settings.port
+    assert_equal 7777, Sinatra::Application.settings.port
   end
 
   def test_new_video_routes_defined

@@ -402,13 +402,15 @@ class YouTubeFiles
   end
 end
 
+set :environment, ENV['RACK_ENV'] || :development
 set :bind, '0.0.0.0'
-set :port, 7778
+set :port, ENV['PORT'] || 7777
+set :protection, host_authorization: { permitted_hosts: [] }
 
 get '/' do
   if defined?(DATA)
     DATA.pos = END_OF_FILE
-    template = DATA.read.split('@@channels')[0]
+    template = DATA.read.force_encoding('UTF-8').split('@@channels')[0]
   else
     template = '<html><body>Test Mode</body></html>'
   end
@@ -464,7 +466,7 @@ get '/video' do
 
   if defined?(DATA)
     DATA.pos = END_OF_FILE
-    template = DATA.read
+    template = DATA.read.force_encoding('UTF-8')
     show_template = template[/@@show\n(.*?)@@end_show/m, 1]
   else
     show_template = '<html><body>Show Test Mode</body></html>'
@@ -483,7 +485,7 @@ get '/channels' do
 
   if defined?(DATA)
     DATA.pos = END_OF_FILE
-    template = DATA.read
+    template = DATA.read.force_encoding('UTF-8')
     channels_template = template[/@@channels\n(.*?)@@end_channels/m, 1]
   else
     channels_template = '<html><body>Channels Test Mode</body></html>'
@@ -703,7 +705,7 @@ __END__
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Eric's Offline YouTube</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' class='h-5 w-5' viewBox='0 0 20 20' fill='red'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z' clip-rule='evenodd' /%3E%3C/svg%3E" type="image/svg+xml" />
   <script src="./assets/tailwind-browser.js"></script>
@@ -727,8 +729,41 @@ __END__
 </head>
 <body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
   <!-- Header -->
-  <header class="bg-gray-100 dark:bg-gray-800 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
-    <div class="flex items-center justify-between">
+  <header class="bg-gray-100 dark:bg-gray-900 py-3 px-4 border-b border-gray-200 dark:border-gray-700">
+    <!-- Mobile Header -->
+    <div class="md:hidden">
+      <div class="flex items-center justify-between mb-3">
+        <h1 class="text-lg font-bold text-red-500">Offline YouTube</h1>
+        <div class="flex items-center space-x-2">
+          <a href="/channels" class="text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors text-xs">
+            Manage Channels
+          </a>
+          <a href="https://www.youtube.com" target="_blank" class="text-red-500 hover:text-red-400">
+            <svg class="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+            </svg>
+          </a>
+        </div>
+      </div>
+      <div class="flex items-center justify-between">
+        <div class="text-xs text-gray-600 dark:text-gray-400">
+          <%= `ls ~/Downloads/YouTube/*.mp4 | wc -l` %> videos / <%= `du -h ~/Downloads/YouTube/ | tail -1 | awk '{print $1}'` %>
+        </div>
+        <!-- Mobile Search -->
+        <div class="flex-1 ml-3">
+          <div class="relative">
+            <input id="search-input-mobile" type="text" placeholder="Search..."
+              class="w-full bg-white dark:bg-gray-700 text-gray-900 dark:text-white px-3 py-2 pl-8 text-sm rounded-full focus:outline-none focus:ring-2 focus:ring-red-500 border border-gray-300 dark:border-gray-600">
+            <svg class="w-4 h-4 text-gray-400 absolute left-2.5 top-1/2 transform -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+            </svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop Header -->
+    <div class="hidden md:flex items-center justify-between">
       <div class="flex items-center space-x-4">
         <h1 class="text-xl font-bold text-red-500">Offline YouTube</h1>
         <div class="text-sm text-gray-600 dark:text-gray-400">
@@ -737,7 +772,7 @@ __END__
         </div>
       </div>
 
-      <!-- Search Bar -->
+      <!-- Desktop Search Bar -->
       <div class="max-w-xl flex-1 mx-8">
         <div class="relative">
           <input id="search-input" type="text" placeholder="Search videos..."
@@ -762,8 +797,52 @@ __END__
   </header>
 
   <!-- Sort Bar -->
-  <div class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 py-4 px-6">
-    <div class="flex items-center justify-between">
+  <div class="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 py-3 px-4">
+    <!-- Mobile Sort Bar -->
+    <div class="md:hidden">
+      <div class="flex items-center justify-between mb-2">
+        <h2 class="text-base font-semibold text-gray-900 dark:text-white">Videos</h2>
+        <div class="text-xs text-gray-500 dark:text-gray-200">
+          <span id="video-count"><%= videos&.json&.length || 0 %></span> videos
+        </div>
+      </div>
+      <div class="flex items-center space-x-3">
+        <div class="flex items-center space-x-1">
+          <span class="text-xs text-gray-600 dark:text-gray-200">Sort:</span>
+          <select id="sort-select" class="form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
+            <option value="addedAtEpoch" <%= 'selected' if params[:sort] == 'addedAtEpoch' || params[:sort].nil? %>>Downloaded</option>
+            <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Created</option>
+          </select>
+          <svg class="w-3 h-3 text-gray-500 dark:text-gray-200 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+          <button id="sort-direction" class="ml-1 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
+            <svg id="sort-asc" class="w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
+            </svg>
+            <svg id="sort-desc" class="w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' unless params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h9m5-4v12m0 0l-4-4m4 4l4-4"/>
+            </svg>
+          </button>
+        </div>
+
+        <div class="flex items-center space-x-1">
+          <span class="text-xs text-gray-600 dark:text-gray-200">Filter:</span>
+          <select id="filter-select" class="form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
+            <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All</option>
+            <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
+            <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partial</option>
+            <option value="watched" <%= 'selected' if params[:filter] == 'watched' %>>Watched</option>
+          </select>
+          <svg class="w-3 h-3 text-gray-500 dark:text-gray-200 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Desktop Sort Bar -->
+    <div class="hidden md:flex items-center justify-between">
       <div class="flex items-center space-x-4">
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Videos</h2>
         <div class="flex items-center space-x-6">
@@ -808,8 +887,8 @@ __END__
   </div>
 
   <!-- Video Grid -->
-  <main class="px-6 py-8">
-    <div id="video-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-6">
+  <main class="px-4 py-6 md:px-6 md:py-8">
+    <div id="video-grid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-4 md:gap-6">
       <% (videos&.json || []).each do |video| %>
         <div class="video-card bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-lg">
           <!-- Thumbnail -->
@@ -906,14 +985,21 @@ __END__
   </main>
 
   <script>
+    // Hide IINA buttons on remote access (non-localhost)
+    const isRemote = !['localhost', '127.0.0.1', 'e14.local'].includes(window.location.hostname);
+    if (isRemote) {
+      document.querySelectorAll('.iina-play-btn').forEach(btn => btn.style.display = 'none');
+    }
+
     // Search functionality
     const searchInput = document.getElementById('search-input');
+    const searchInputMobile = document.getElementById('search-input-mobile');
     const videoGrid = document.getElementById('video-grid');
     const youtubeSearchCard = document.getElementById('youtube-search-card');
     const youtubeSearchLink = document.getElementById('youtube-search-link');
     const videoCards = document.querySelectorAll('.video-card:not(#youtube-search-card)');
 
-    searchInput.addEventListener('input', (e) => {
+    function handleSearch(e) {
       const query = e.target.value.toLowerCase().trim();
       const youtubeCardText = document.getElementById('youtube-card-text');
       const videoCountEl = document.getElementById('video-count');
@@ -950,7 +1036,18 @@ __END__
       } else {
         youtubeCardText.textContent = `Search "${query}" on YouTube for more videos`;
       }
-    });
+
+      // Sync search inputs
+      if (e.target.id === 'search-input') {
+        searchInputMobile.value = query;
+      } else {
+        searchInput.value = query;
+      }
+    }
+
+    // Add event listeners to both search inputs
+    searchInput.addEventListener('input', handleSearch);
+    searchInputMobile.addEventListener('input', handleSearch);
 
     // Convert timestamps to relative time
     function timeAgo(timestamp) {
@@ -1099,61 +1196,108 @@ __END__
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>Manage Channels - Offline YouTube</title>
   <script src="./assets/tailwind-browser.js"></script>
 </head>
 <body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
   <!-- Header -->
-  <header class="bg-gray-100 dark:bg-gray-800 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
+  <header class="bg-gray-100 dark:bg-gray-900 py-3 px-4 md:py-4 md:px-6 border-b border-gray-200 dark:border-gray-700">
     <div class="flex items-center justify-between">
-      <div class="flex items-center space-x-4">
-        <h1 class="text-xl font-bold text-red-500">
+      <div class="flex items-center space-x-2 md:space-x-4">
+        <h1 class="text-lg md:text-xl font-bold text-red-500">
           <a href="/">Offline YouTube</a>
         </h1>
-        <span class="text-sm text-gray-600 dark:text-gray-400">Channel Management</span>
+        <span class="text-xs md:text-sm text-gray-600 dark:text-gray-300">Channel Management</span>
       </div>
     </div>
   </header>
 
-  <main class="max-w-4xl mx-auto px-6 py-8">
-    <div class="mb-8">
-      <h2 class="text-2xl font-bold mb-4">Channel URL Cache</h2>
-      <p class="text-gray-600 dark:text-gray-400 mb-6">
+  <main class="max-w-4xl mx-auto px-4 py-6 md:px-6 md:py-8">
+    <div class="mb-6 md:mb-8">
+      <h2 class="text-xl md:text-2xl font-bold mb-3 md:mb-4">Channel URL Cache</h2>
+      <p class="text-sm md:text-base text-gray-600 dark:text-gray-300 mb-4 md:mb-6">
         Manage cached channel URLs. The app automatically tries @username URLs first, then caches search URLs if they don't work.
       </p>
 
       <!-- Add New Channel -->
-      <div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-6 mb-8">
-        <h3 class="text-lg font-semibold mb-4">Add/Update Channel URL</h3>
-        <form method="POST" action="/channel-cache" class="flex gap-4">
+      <div class="bg-gray-50 dark:bg-gray-800 rounded-lg p-4 md:p-6 mb-6 md:mb-8">
+        <h3 class="text-base md:text-lg font-semibold mb-3 md:mb-4">Add/Update Channel URL</h3>
+        <form method="POST" action="/channel-cache" class="space-y-3 md:space-y-0 md:flex md:gap-4">
           <input type="text" name="channel_name" placeholder="Channel Name" required
-            class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+            class="w-full md:flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm md:text-base">
           <input type="url" name="channel_url" placeholder="https://www.youtube.com/@channelname" required
-            class="flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
-          <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors">
+            class="w-full md:flex-1 px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white text-sm md:text-base">
+          <button type="submit" class="w-full md:w-auto px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm md:text-base">
             Save
           </button>
         </form>
       </div>
 
       <!-- Channel List -->
-      <div class="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-        <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-          <h3 class="text-lg font-semibold">Cached Channels (<%= @channels&.length || 0 %>)</h3>
+      <div class="bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+        <div class="px-4 py-3 md:px-6 md:py-4 border-b border-gray-200 dark:border-gray-700">
+          <h3 class="text-base md:text-lg font-semibold">Cached Channels (<%= @channels&.length || 0 %>)</h3>
         </div>
 
         <% if @channels&.empty? %>
-          <div class="px-6 py-8 text-center text-gray-500 dark:text-gray-400">
+          <div class="px-4 py-6 md:px-6 md:py-8 text-center text-sm md:text-base text-gray-500 dark:text-gray-300">
             No channels cached yet. URLs will be automatically cached as you browse videos.
           </div>
         <% else %>
           <div class="divide-y divide-gray-200 dark:divide-gray-700">
             <% (@channels || []).each do |channel_name, channel_url| %>
-              <div class="px-6 py-4 flex items-center justify-between">
+              <!-- Mobile Layout -->
+              <div class="md:hidden px-4 py-3">
+                <div class="mb-2">
+                  <div class="font-medium text-sm"><%= channel_name %></div>
+                  <div class="flex items-center mt-1 mb-2">
+                    <% if channel_url.include?('youtube.com/@') %>
+                      <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200">
+                        Direct
+                      </span>
+                    <% else %>
+                      <span class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200">
+                        Search
+                      </span>
+                    <% end %>
+                  </div>
+                </div>
+                <div class="text-xs text-gray-600 dark:text-gray-300 mb-3">
+                  <div class="edit-display">
+                    <a href="<%= channel_url %>" target="_blank" class="hover:text-red-500 transition-colors break-all">
+                      <%= channel_url %>
+                    </a>
+                  </div>
+                  <form method="POST" action="/channel-cache" class="edit-form hidden">
+                    <input type="hidden" name="channel_name" value="<%= channel_name %>">
+                    <input type="url" name="channel_url" value="<%= channel_url %>"
+                      class="w-full px-2 py-1 text-xs border border-gray-300 dark:border-gray-600 rounded bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                  </form>
+                </div>
+                <div class="flex items-center justify-between">
+                  <div class="flex items-center space-x-3">
+                    <button onclick="toggleEdit(this)" class="edit-btn text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 text-xs" title="Edit URL">
+                      Edit
+                    </button>
+                    <button onclick="saveEdit(this)" class="save-btn hidden text-green-600 hover:text-green-800 dark:text-green-400 dark:hover:text-green-300 text-xs">
+                      Save
+                    </button>
+                    <button onclick="cancelEdit(this)" class="cancel-btn hidden text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-300 text-xs">
+                      Cancel
+                    </button>
+                  </div>
+                  <button onclick="confirmDelete('<%= channel_name %>')" class="text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300 text-xs" title="Delete channel">
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <!-- Desktop Layout -->
+              <div class="hidden md:flex px-6 py-4 items-center justify-between">
                 <div class="flex-1">
                   <div class="font-medium"><%= channel_name %></div>
-                  <div class="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  <div class="text-sm text-gray-600 dark:text-gray-300 mt-1">
                     <div class="edit-display">
                       <a href="<%= channel_url %>" target="_blank" class="hover:text-red-500 transition-colors">
                         <%= channel_url %>
@@ -1203,7 +1347,8 @@ __END__
 
   <script>
     function toggleEdit(button) {
-      const row = button.closest('.px-6');
+      // Find the row container (works for both mobile px-4 and desktop px-6)
+      const row = button.closest('[class*="px-"]');
       const editDisplay = row.querySelector('.edit-display');
       const editForm = row.querySelector('.edit-form');
       const editBtn = row.querySelector('.edit-btn');
@@ -1220,7 +1365,8 @@ __END__
     }
 
     function cancelEdit(button) {
-      const row = button.closest('.px-6');
+      // Find the row container (works for both mobile px-4 and desktop px-6)
+      const row = button.closest('[class*="px-"]');
       const editDisplay = row.querySelector('.edit-display');
       const editForm = row.querySelector('.edit-form');
       const editBtn = row.querySelector('.edit-btn');
@@ -1239,7 +1385,8 @@ __END__
     }
 
     function saveEdit(button) {
-      const row = button.closest('.px-6');
+      // Find the row container (works for both mobile px-4 and desktop px-6)
+      const row = button.closest('[class*="px-"]');
       const editForm = row.querySelector('.edit-form');
       editForm.submit();
     }
@@ -1270,20 +1417,20 @@ __END__
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title><%= @video['cleanTitle'] || @video['title'] %> - Offline YouTube</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' class='h-5 w-5' viewBox='0 0 20 20' fill='red'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z' clip-rule='evenodd' /%3E%3C/svg%3E" type="image/svg+xml" />
   <script src="./assets/tailwind-browser.js"></script>
 </head>
 <body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
   <!-- Header -->
-  <header class="bg-gray-100 dark:bg-gray-800 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
+  <header class="bg-gray-100 dark:bg-gray-900 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
     <div class="flex items-center justify-between">
       <div class="flex items-center space-x-4">
         <h1 class="text-xl font-bold text-red-500">
           <a href="/">Offline YouTube</a>
         </h1>
-        <span class="text-sm text-gray-600 dark:text-gray-400">Video Player</span>
+        <span class="text-sm text-gray-600 dark:text-gray-300">Video Player</span>
       </div>
 
       <!-- Search Bar -->
@@ -1311,8 +1458,17 @@ __END__
   </header>
 
   <!-- Video Player Section -->
-  <div id="video-container" class="w-full max-w-4xl mx-auto px-6 pt-4 pb-2 mb-4 transition-all duration-300">
+  <div id="video-container" class="w-full max-w-5xl mx-auto px-6 pt-4 pb-2 mb-4 transition-all duration-300">
     <div class="relative">
+      <!-- Theater Mode Toggle -->
+      <button id="theater-toggle" class="absolute top-2 right-2 z-10 flex items-center justify-center w-8 h-8 bg-black bg-opacity-30 hover:bg-opacity-60 text-white rounded-lg transition-all duration-300 opacity-100" title="Toggle theater mode (T)">
+        <svg id="theater-icon" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4a1 1 0 011-1h14a1 1 0 011 1v4m0 0v8a1 1 0 01-1 1H5a1 1 0 01-1-1V8m16 0H4"/>
+        </svg>
+        <svg id="normal-icon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
       <% if @video_file_exists %>
         <div class="relative aspect-video bg-black rounded-lg overflow-hidden">
           <video
@@ -1384,7 +1540,7 @@ __END__
     </div>
 
     <!-- Video Info -->
-    <div class="bg-white dark:bg-gray-800 rounded-lg p-6 shadow-lg">
+    <div class="bg-white dark:bg-gray-900 rounded-lg p-6 shadow-lg">
       <% if @video['description'] && !@video['description'].empty? %>
         <div class="mb-6">
           <h3 class="text-lg font-semibold mb-3 text-gray-900 dark:text-white">Description</h3>
@@ -1490,6 +1646,12 @@ __END__
   </main>
 
   <script>
+    // Hide IINA buttons on remote access (non-localhost)
+    const isRemote = !['localhost', '127.0.0.1', 'e14.local'].includes(window.location.hostname);
+    if (isRemote) {
+      document.querySelectorAll('.iina-play-btn').forEach(btn => btn.style.display = 'none');
+    }
+
     // Get the video element for keyboard controls
     const videoElement = document.querySelector('video');
 
@@ -1634,7 +1796,33 @@ __END__
     const theaterIcon = document.getElementById('theater-icon');
     const normalIcon = document.getElementById('normal-icon');
 
+    // Auto-hide theater button functionality
+    let hideTimeout;
+
+    function showTheaterButton() {
+      theaterToggle.style.opacity = '1';
+      clearTimeout(hideTimeout);
+      hideTimeout = setTimeout(() => {
+        theaterToggle.style.opacity = '0';
+      }, 3000); // Hide after 3 seconds of no mouse movement
+    }
+
+    function keepTheaterButtonVisible() {
+      theaterToggle.style.opacity = '1';
+      clearTimeout(hideTimeout);
+    }
+
     if (theaterToggle && videoContainer) {
+      // Show button on mouse movement over video container
+      videoContainer.addEventListener('mousemove', showTheaterButton);
+      videoContainer.addEventListener('mouseenter', showTheaterButton);
+
+      // Keep button visible when hovering over it
+      theaterToggle.addEventListener('mouseenter', keepTheaterButtonVisible);
+      theaterToggle.addEventListener('mouseleave', showTheaterButton);
+
+      // Initial auto-hide
+      showTheaterButton();
       // Load saved theater mode preference
       const isTheaterMode = localStorage.getItem('theaterMode') === 'true';
       if (isTheaterMode) {
@@ -1652,19 +1840,31 @@ __END__
       });
 
       function enableTheaterMode() {
-        videoContainer.classList.remove('w-full', 'max-w-4xl');
+        // Temporarily disable transitions for smooth theater mode change
+        videoContainer.style.transition = 'none';
+        videoContainer.classList.remove('w-full', 'max-w-5xl');
         videoContainer.classList.add('w-4/5');
         theaterIcon.classList.add('hidden');
         normalIcon.classList.remove('hidden');
         localStorage.setItem('theaterMode', 'true');
+        // Re-enable transitions after a brief delay
+        setTimeout(() => {
+          videoContainer.style.transition = '';
+        }, 50);
       }
 
       function disableTheaterMode() {
+        // Temporarily disable transitions for smooth theater mode change
+        videoContainer.style.transition = 'none';
         videoContainer.classList.remove('w-4/5');
-        videoContainer.classList.add('w-full', 'max-w-4xl');
+        videoContainer.classList.add('w-full', 'max-w-5xl');
         theaterIcon.classList.remove('hidden');
         normalIcon.classList.add('hidden');
         localStorage.setItem('theaterMode', 'false');
+        // Re-enable transitions after a brief delay
+        setTimeout(() => {
+          videoContainer.style.transition = '';
+        }, 50);
       }
     }
 

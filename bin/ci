@@ -18,8 +18,8 @@ if [ "$1" = "--fix" ]; then
   echo "✅ rubocop auto-fix completed"
   echo
 
-  echo "🎉 All fixes applied!"
-  exit 0
+  echo "🎉 All fixes applied! Continuing with CI pipeline..."
+  echo
 fi
 
 echo "🚀 Running CI pipeline..."

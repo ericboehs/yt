@@ -40,9 +40,78 @@ The app provides a Netflix-style grid interface for browsing your offline video 
   ./yt
   ```
 
-The app will automatically install required Ruby gems and start the web server at `http://localhost:7778`.
+The app will automatically install required Ruby gems and start the web server at `http://localhost:7777` (or the port specified by the `PORT` environment variable).
 
 ## Usage
+
+### Running as a Service (macOS)
+
+To run the application automatically on startup using macOS Launch Agents:
+
+1. **Create a launch agent plist file** at `~/Library/LaunchAgents/com.ericboehs.yt.plist`:
+  ```xml
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+    <dict>
+      <key>EnvironmentVariables</key>
+      <dict>
+        <key>PATH</key>
+        <string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PORT</key>
+        <string>7777</string>
+        <key>RACK_ENV</key>
+        <string>production</string>
+      </dict>
+      <key>KeepAlive</key>
+      <true/>
+      <key>Label</key>
+      <string>com.ericboehs.yt</string>
+      <key>ProgramArguments</key>
+      <array>
+        <string>ruby</string>
+        <string>/path/to/your/yt/script</string>
+      </array>
+      <key>RunAtLoad</key>
+      <true/>
+      <key>StandardErrorPath</key>
+      <string>/Users/yourname/Library/Logs/com.ericboehs.yt/stdout.log</string>
+      <key>StandardOutPath</key>
+      <string>/Users/yourname/Library/Logs/com.ericboehs.yt/stdout.log</string>
+      <key>WorkingDirectory</key>
+      <string>/path/to/your/yt/directory</string>
+    </dict>
+  </plist>
+  ```
+
+2. **Create the log directory**:
+  ```bash
+  mkdir -p ~/Library/Logs/com.ericboehs.yt
+  ```
+
+3. **Load the service**:
+  ```bash
+  launchctl load -w ~/Library/LaunchAgents/com.ericboehs.yt.plist
+  ```
+
+4. **Manage the service**:
+  ```bash
+  # Restart the service
+  launchctl unload ~/Library/LaunchAgents/com.ericboehs.yt.plist
+  launchctl load -w ~/Library/LaunchAgents/com.ericboehs.yt.plist
+   
+  # View logs
+  tail -f ~/Library/Logs/com.ericboehs.yt/stdout.log
+   
+  # Stop the service
+  launchctl unload ~/Library/LaunchAgents/com.ericboehs.yt.plist
+  ```
+
+**Important notes:**
+- Update the paths to match your system (replace `/path/to/your/` and `yourname` with actual paths)
+- Ensure your `PATH` includes the directory where Ruby is installed
+- The service will automatically restart if it crashes (`KeepAlive`)
+- Logs are written to the specified log file for debugging
 
 ### Downloading Videos
 
@@ -69,7 +138,7 @@ Visit `/channels` to manage cached channel URLs. The app automatically tries to 
 The app uses these default paths:
 - **Download Directory**: `~/Downloads/YouTube/`
 - **Cache File**: `~/Downloads/YouTube/channel_cache.json`
-- **Server**: `http://0.0.0.0:7778`
+- **Server**: `http://0.0.0.0:7777` (configurable via `PORT` env var)
 
 ## Development
 
