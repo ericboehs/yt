@@ -815,17 +815,43 @@ __END__
         </div>
       </div>
       <div class="flex items-center space-x-3">
-        <div class="flex items-center space-x-1">
-          <span class="text-xs text-gray-600 dark:text-gray-200">Sort:</span>
-          <select id="sort-select-mobile" class="sort-select form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
-            <option value="downloadedAt" <%= 'selected' if params[:sort] == 'downloadedAt' || params[:sort].nil? %>>Downloaded</option>
-            <option value="recentlyPlayed" <%= 'selected' if params[:sort] == 'recentlyPlayed' %>>Played</option>
-            <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Created</option>
-          </select>
-          <svg class="w-3 h-3 text-gray-500 dark:text-gray-200 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-          </svg>
-          <button id="sort-direction-mobile" class="sort-direction ml-1 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
+        <div class="flex items-center space-x-2 flex-1">
+          <span class="text-sm text-gray-600 dark:text-gray-200">Sort:</span>
+          <div class="relative flex-1">
+            <button type="button" class="sort-dropdown-trigger grid cursor-default grid-cols-1 rounded-md bg-white dark:bg-gray-800 py-3 pr-3 pl-3 text-left text-gray-900 dark:text-white outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500 text-sm w-full" data-dropdown="sort-mobile">
+              <span class="col-start-1 row-start-1 truncate pr-4"><%= params[:sort] == 'recentlyPlayed' ? 'Played' : (params[:sort] == 'uploadDateEpoch' ? 'Created' : 'Downloaded') %></span>
+              <svg class="col-start-1 row-start-1 w-3 h-3 self-center justify-self-end text-gray-500 dark:text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.22 10.22a.75.75 0 0 1 1.06 0L8 11.94l1.72-1.72a.75.75 0 1 1 1.06 1.06l-2.25 2.25a.75.75 0 0 1-1.06 0l-2.25-2.25a.75.75 0 0 1 0-1.06ZM10.78 5.78a.75.75 0 0 1-1.06 0L8 4.06 6.28 5.78a.75.75 0 0 1-1.06-1.06l2.25-2.25a.75.75 0 0 1 1.06 0l2.25 2.25a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd" />
+              </svg>
+            </button>
+            <ul class="dropdown-menu absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-gray-800 py-1 text-sm shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-hidden hidden" data-dropdown="sort-mobile">
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="downloadedAt">
+                <span class="block truncate">Downloaded</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:sort] == 'downloadedAt' || params[:sort].nil? %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="recentlyPlayed">
+                <span class="block truncate">Played</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:sort] == 'recentlyPlayed' %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="uploadDateEpoch">
+                <span class="block truncate">Created</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:sort] == 'uploadDateEpoch' %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+            </ul>
+          </div>
+          <button id="sort-direction-mobile" class="sort-direction px-3 py-3 bg-white dark:bg-gray-800 outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors text-sm grid place-items-center" title="Toggle sort direction">
             <svg class="sort-asc w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
             </svg>
@@ -835,17 +861,50 @@ __END__
           </button>
         </div>
 
-        <div class="flex items-center space-x-1">
-          <span class="text-xs text-gray-600 dark:text-gray-200">Filter:</span>
-          <select id="filter-select-mobile" class="filter-select form-select appearance-none bg-transparent border-0 text-xs font-medium text-gray-700 dark:text-white focus:outline-none focus:ring-0 cursor-pointer font-sans">
-            <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All</option>
-            <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
-            <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partial</option>
-            <option value="watched" <%= 'selected' if params[:filter] == 'watched' %>>Watched</option>
-          </select>
-          <svg class="w-3 h-3 text-gray-500 dark:text-gray-200 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-          </svg>
+        <div class="flex items-center space-x-2 flex-1">
+          <span class="text-sm text-gray-600 dark:text-gray-200">Filter:</span>
+          <div class="relative flex-1">
+            <button type="button" class="filter-dropdown-trigger grid cursor-default grid-cols-1 rounded-md bg-white dark:bg-gray-800 py-3 pr-3 pl-3 text-left text-gray-900 dark:text-white outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500 text-sm w-full" data-dropdown="filter-mobile">
+              <span class="col-start-1 row-start-1 truncate pr-4"><%= params[:filter] == 'unwatched' ? 'Unwatched' : (params[:filter] == 'partial' ? 'Partial' : (params[:filter] == 'watched' ? 'Watched' : 'All')) %></span>
+              <svg class="col-start-1 row-start-1 w-3 h-3 self-center justify-self-end text-gray-500 dark:text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+                <path fill-rule="evenodd" d="M5.22 10.22a.75.75 0 0 1 1.06 0L8 11.94l1.72-1.72a.75.75 0 1 1 1.06 1.06l-2.25 2.25a.75.75 0 0 1-1.06 0l-2.25-2.25a.75.75 0 0 1 0-1.06ZM10.78 5.78a.75.75 0 0 1-1.06 0L8 4.06 6.28 5.78a.75.75 0 0 1-1.06-1.06l2.25-2.25a.75.75 0 0 1 1.06 0l2.25 2.25a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd" />
+              </svg>
+            </button>
+            <ul class="dropdown-menu absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-gray-800 py-1 text-xs shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-hidden hidden" data-dropdown="filter-mobile">
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="all">
+                <span class="block truncate">All</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'all' || params[:filter].nil? %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="unwatched">
+                <span class="block truncate">Unwatched</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'unwatched' %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="partial">
+                <span class="block truncate">Partial</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'partial' %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+              <li class="dropdown-item relative cursor-pointer py-2 pr-8 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="watched">
+                <span class="block truncate">Watched</span>
+                <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-2 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'watched' %>">
+                  <svg class="w-3 h-3" viewBox="0 0 20 20" fill="currentColor">
+                    <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                  </svg>
+                </span>
+              </li>
+            </ul>
+          </div>
         </div>
       </div>
     </div>
@@ -854,18 +913,94 @@ __END__
     <div class="hidden md:flex items-center justify-between">
       <div class="flex items-center space-x-4">
         <h2 class="text-lg font-semibold text-gray-900 dark:text-white">Videos</h2>
-        <div class="flex items-center space-x-6">
+      </div>
+      <div class="flex items-center space-x-6">
+          <div class="flex items-center space-x-2">
+            <span class="text-sm text-gray-600 dark:text-gray-400">Filter:</span>
+            <div class="relative">
+              <button type="button" class="filter-dropdown-trigger grid cursor-default grid-cols-1 rounded-md bg-white dark:bg-gray-800 py-1.5 pr-2 pl-3 text-left text-gray-900 dark:text-white outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500 text-sm min-w-44" data-dropdown="filter-desktop">
+                <span class="col-start-1 row-start-1 truncate pr-6"><%= params[:filter] == 'unwatched' ? 'Unwatched' : (params[:filter] == 'partial' ? 'Partially Played' : (params[:filter] == 'watched' ? 'Watched' : 'All Videos')) %></span>
+                <svg class="col-start-1 row-start-1 w-4 h-4 self-center justify-self-end text-gray-500 dark:text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+                  <path fill-rule="evenodd" d="M5.22 10.22a.75.75 0 0 1 1.06 0L8 11.94l1.72-1.72a.75.75 0 1 1 1.06 1.06l-2.25 2.25a.75.75 0 0 1-1.06 0l-2.25-2.25a.75.75 0 0 1 0-1.06ZM10.78 5.78a.75.75 0 0 1-1.06 0L8 4.06 6.28 5.78a.75.75 0 0 1-1.06-1.06l2.25-2.25a.75.75 0 0 1 1.06 0l2.25 2.25a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd" />
+                </svg>
+              </button>
+              <ul class="dropdown-menu absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-gray-800 py-1 text-sm shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-hidden hidden" data-dropdown="filter-desktop">
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="all">
+                  <span class="block truncate">All Videos</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'all' || params[:filter].nil? %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="unwatched">
+                  <span class="block truncate">Unwatched</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'unwatched' %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="partial">
+                  <span class="block truncate">Partially Played</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'partial' %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="watched">
+                  <span class="block truncate">Watched</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:filter] == 'watched' %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <!-- Divider -->
+          <div class="h-6 w-px bg-gray-300 dark:bg-gray-600"></div>
+
           <div class="flex items-center space-x-2">
             <span class="text-sm text-gray-600 dark:text-gray-400">Sort by:</span>
-            <select id="sort-select-desktop" class="sort-select form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
-              <option value="downloadedAt" <%= 'selected' if params[:sort] == 'downloadedAt' || params[:sort].nil? %>>Recently Downloaded</option>
-              <option value="recentlyPlayed" <%= 'selected' if params[:sort] == 'recentlyPlayed' %>>Recently Played</option>
-              <option value="uploadDateEpoch" <%= 'selected' if params[:sort] == 'uploadDateEpoch' %>>Recently Created</option>
-            </select>
-            <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-            </svg>
-            <button id="sort-direction-desktop" class="sort-direction ml-2 p-1 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors" title="Toggle sort direction">
+            <div class="relative">
+              <button type="button" class="sort-dropdown-trigger grid cursor-default grid-cols-1 rounded-md bg-white dark:bg-gray-800 py-1.5 pr-2 pl-3 text-left text-gray-900 dark:text-white outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500 text-sm min-w-48" data-dropdown="sort-desktop">
+                <span class="col-start-1 row-start-1 truncate pr-6"><%= params[:sort] == 'recentlyPlayed' ? 'Recently Played' : (params[:sort] == 'uploadDateEpoch' ? 'Recently Created' : 'Recently Downloaded') %></span>
+                <svg class="col-start-1 row-start-1 w-4 h-4 self-center justify-self-end text-gray-500 dark:text-gray-400" viewBox="0 0 16 16" fill="currentColor">
+                  <path fill-rule="evenodd" d="M5.22 10.22a.75.75 0 0 1 1.06 0L8 11.94l1.72-1.72a.75.75 0 1 1 1.06 1.06l-2.25 2.25a.75.75 0 0 1-1.06 0l-2.25-2.25a.75.75 0 0 1 0-1.06ZM10.78 5.78a.75.75 0 0 1-1.06 0L8 4.06 6.28 5.78a.75.75 0 0 1-1.06-1.06l2.25-2.25a.75.75 0 0 1 1.06 0l2.25 2.25a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd" />
+                </svg>
+              </button>
+              <ul class="dropdown-menu absolute z-10 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white dark:bg-gray-800 py-1 text-sm shadow-lg ring-1 ring-black/5 dark:ring-white/10 focus:outline-hidden hidden" data-dropdown="sort-desktop">
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="downloadedAt">
+                  <span class="block truncate">Recently Downloaded</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:sort] == 'downloadedAt' || params[:sort].nil? %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="recentlyPlayed">
+                  <span class="block truncate">Recently Played</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:sort] == 'recentlyPlayed' %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+                <li class="dropdown-item relative cursor-pointer py-2 pr-9 pl-3 text-gray-900 dark:text-white select-none hover:bg-gray-100 dark:hover:bg-gray-700" data-value="uploadDateEpoch">
+                  <span class="block truncate">Recently Created</span>
+                  <span class="checkmark absolute inset-y-0 right-0 flex items-center pr-4 text-blue-600 dark:text-blue-400 <%= 'hidden' unless params[:sort] == 'uploadDateEpoch' %>">
+                    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="currentColor">
+                      <path fill-rule="evenodd" d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z" clip-rule="evenodd" />
+                    </svg>
+                  </span>
+                </li>
+              </ul>
+            </div>
+            <button id="sort-direction-desktop" class="sort-direction ml-2 px-3 py-1.5 bg-white dark:bg-gray-800 outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors text-sm grid place-items-center" title="Toggle sort direction">
               <svg class="sort-asc w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
               </svg>
@@ -874,22 +1009,7 @@ __END__
               </svg>
             </button>
           </div>
-
-          <div class="flex items-center space-x-2">
-            <span class="text-sm text-gray-600 dark:text-gray-400">Filter:</span>
-            <select id="filter-select-desktop" class="filter-select form-select appearance-none bg-transparent border-0 text-sm font-medium text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-0 cursor-pointer font-sans">
-              <option value="all" <%= 'selected' if params[:filter] == 'all' || params[:filter].nil? %>>All Videos</option>
-              <option value="unwatched" <%= 'selected' if params[:filter] == 'unwatched' %>>Unwatched</option>
-              <option value="partial" <%= 'selected' if params[:filter] == 'partial' %>>Partially Played</option>
-              <option value="watched" <%= 'selected' if params[:filter] == 'watched' %>>Watched</option>
-            </select>
-            <svg class="w-4 h-4 text-gray-500 dark:text-gray-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-            </svg>
-          </div>
         </div>
-      </div>
-
       <div class="text-sm text-gray-500 dark:text-gray-400">
         Showing <span id="video-count"><%= videos&.json&.length || 0 %></span> videos
       </div>
@@ -1094,14 +1214,52 @@ __END__
     updateRelativeTimes();
     setInterval(updateRelativeTimes, 60000);
 
-    // Sort functionality
-    document.querySelectorAll('.sort-select').forEach(function(element) {
-      element.addEventListener('change', function() {
-        const sortBy = this.value;
+    // Custom dropdown functionality
+    document.querySelectorAll('.sort-dropdown-trigger, .filter-dropdown-trigger').forEach(function(trigger) {
+      trigger.addEventListener('click', function() {
+        const dropdownId = this.getAttribute('data-dropdown');
+        const menu = document.querySelector(`[data-dropdown="${dropdownId}"].dropdown-menu`);
+
+        // Close all other dropdowns
+        document.querySelectorAll('.dropdown-menu').forEach(function(otherMenu) {
+          if (otherMenu !== menu) {
+            otherMenu.classList.add('hidden');
+          }
+        });
+
+        // Toggle this dropdown
+        menu.classList.toggle('hidden');
+      });
+    });
+
+    // Handle dropdown item clicks
+    document.querySelectorAll('.dropdown-item').forEach(function(item) {
+      item.addEventListener('click', function() {
+        const value = this.getAttribute('data-value');
+        const dropdownId = this.closest('.dropdown-menu').getAttribute('data-dropdown');
         const currentParams = new URLSearchParams(window.location.search);
-        currentParams.set('sort', sortBy);
+
+        if (dropdownId.includes('sort')) {
+          currentParams.set('sort', value);
+        } else if (dropdownId.includes('filter')) {
+          if (value === 'all') {
+            currentParams.delete('filter');
+          } else {
+            currentParams.set('filter', value);
+          }
+        }
+
         window.location.search = currentParams.toString();
       });
+    });
+
+    // Close dropdowns when clicking outside
+    document.addEventListener('click', function(event) {
+      if (!event.target.closest('.sort-dropdown-trigger, .filter-dropdown-trigger') && !event.target.closest('.dropdown-menu')) {
+        document.querySelectorAll('.dropdown-menu').forEach(function(menu) {
+          menu.classList.add('hidden');
+        });
+      }
     });
 
     // Sort direction toggle
