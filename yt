@@ -21,6 +21,7 @@ end
 
 DOWNLOAD_PATH = "#{Dir.home}/Downloads/YouTube/"
 CHANNEL_CACHE_FILE = "#{DOWNLOAD_PATH}channel_cache.json"
+SLUG_CACHE_FILE = "#{DOWNLOAD_PATH}slug_cache.json"
 END_OF_FILE = defined?(DATA) ? DATA.pos.freeze : 0
 
 # Manages caching of YouTube channel URLs to avoid repeated API lookups
@@ -48,6 +49,72 @@ class ChannelCache
     cache = load_cache
     cache[channel_name] = url
     save_cache(cache)
+  end
+end
+
+# Manages mapping between URL-friendly slugs and video file paths
+class SlugCache
+  def self.load_cache
+    return {} unless File.exist?(SLUG_CACHE_FILE)
+
+    JSON.parse(File.read(SLUG_CACHE_FILE, encoding: 'UTF-8'))
+  rescue StandardError
+    {}
+  end
+
+  def self.save_cache(cache)
+    File.write(SLUG_CACHE_FILE, cache.to_json, encoding: 'UTF-8')
+  rescue StandardError
+    # Silently fail if we can't write
+  end
+
+  def self.get_file_path(slug)
+    cache = load_cache
+    cache[slug]
+  end
+
+  def self.set_mapping(slug, file_path)
+    cache = load_cache
+    cache[slug] = file_path
+    save_cache(cache)
+  end
+
+  def self.generate_slug(title, _authors = nil, _upload_date = nil)
+    base_slug = normalize_title(title)
+    make_unique_slug(base_slug)
+  end
+
+  def self.normalize_title(title)
+    slug = title.to_s.dup
+    slug = slug.gsub(/[^\w\s-]/, '').gsub(/\s+/, '-').gsub(/-+/, '-')
+    slug = slug.downcase.strip.gsub(/^-+|-+$/, '')
+    slug = slug[0, 80] if slug.length > 80
+    slug.empty? ? 'video' : slug
+  end
+
+  def self.make_unique_slug(base_slug)
+    cache = load_cache
+    return base_slug unless cache.key?(base_slug)
+
+    counter = 1
+    loop do
+      candidate = "#{base_slug}-#{counter}"
+      return candidate unless cache.key?(candidate)
+
+      counter += 1
+    end
+  end
+
+  def self.get_or_create_slug(file_path, title, authors = nil, upload_date = nil)
+    # Check if we already have a slug for this file
+    cache = load_cache
+    existing_slug = cache.find { |_, path| path == file_path }&.first
+    return existing_slug if existing_slug
+
+    # Generate new slug
+    slug = generate_slug(title, authors, upload_date)
+    set_mapping(slug, file_path)
+    slug
   end
 end
 
@@ -79,7 +146,8 @@ class DownieJSON
       'progress' => progress,
       'url' => url,
       'cleanTitle' => clean_title,
-      'channelUrl' => channel_url
+      'channelUrl' => channel_url,
+      'slug' => slug
     )
   end
 
@@ -93,7 +161,8 @@ class DownieJSON
       'progress' => 0,
       'url' => raw_json['url'],
       'cleanTitle' => raw_json['title'] || 'Unknown Title',
-      'channelUrl' => nil
+      'channelUrl' => nil,
+      'slug' => SlugCache.generate_slug(raw_json['title'] || 'Unknown Title')
     )
   end
 
@@ -262,7 +331,10 @@ class DownieJSON
   end
 
   def upload_date_epoch
-    date = Date.parse raw_json['uploadDate'] || raw_json['prepareDate']
+    date_string = raw_json['uploadDate'] || raw_json['prepareDate']
+    return 0 unless date_string
+    
+    date = Date.parse date_string
     date.to_time.to_i
   end
 
@@ -327,6 +399,10 @@ class DownieJSON
   rescue StandardError => e
     puts "  -> ERROR: #{e.message}" unless ENV['YT_TEST_MODE']
     false
+  end
+
+  def slug
+    SlugCache.get_or_create_slug(file, clean_title, raw_json['authors'], raw_json['uploadDate'])
   end
 
   def youtube_video?
@@ -406,7 +482,7 @@ class YouTubeFiles
   end
 
   def json_files
-    Dir["#{DOWNLOAD_PATH}*.json"].reject { |file| file.end_with?('channel_cache.json') }
+    Dir["#{DOWNLOAD_PATH}*.json"].reject { |file| file.end_with?('channel_cache.json') || file.end_with?('slug_cache.json') }
   end
 end
 
@@ -462,6 +538,34 @@ get '/video' do
   file_path = params[:file]
 
   # Security check - ensure file is in download directory
+  unless file_path&.start_with?(DOWNLOAD_PATH) && File.exist?(file_path)
+    status 404
+    return 'Video not found'
+  end
+
+  downie_json = DownieJSON.new(file_path)
+  @video = downie_json.json
+  @video_file_exists = File.exist?(@video['file'].sub('.json', '.mp4'))
+  @start_time = downie_json.send(:start)
+
+  if defined?(DATA)
+    DATA.pos = END_OF_FILE
+    template = DATA.read.force_encoding('UTF-8')
+    show_template = template[/@@show\n(.*?)@@end_show/m, 1]
+  else
+    show_template = '<html><body>Show Test Mode</body></html>'
+  end
+
+  ERB.new(show_template).result binding
+end
+
+get '/watch' do
+  slug = params[:v]
+
+  # Look up file path from slug
+  file_path = SlugCache.get_file_path(slug)
+
+  # Security check - ensure file exists and is in download directory
   unless file_path&.start_with?(DOWNLOAD_PATH) && File.exist?(file_path)
     status 404
     return 'Video not found'
@@ -1021,7 +1125,7 @@ __END__
         <div class="video-card bg-white dark:bg-gray-800 rounded-lg overflow-hidden hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors shadow-lg">
           <!-- Thumbnail -->
           <div class="relative aspect-video bg-white dark:bg-gray-100 group">
-            <a href="/video?file=<%= ERB::Util.url_encode(video['file']) %>" class="block w-full h-full">
+            <a href="/watch?v=<%= video['slug'] %>" class="block w-full h-full">
               <img src="<%= video['previewImageURL'] %>"
                 alt="<%= video['title'] %>"
                 class="w-full h-full object-cover <%= video['watched'].nil? || video['watched']&.empty? ? '' : 'opacity-60' %>">
@@ -1049,7 +1153,7 @@ __END__
           <!-- Video Info -->
           <div class="p-4">
             <h3 class="video-title text-base font-medium line-clamp-2 mb-2 text-gray-900 dark:text-white">
-              <a href="/video?file=<%= ERB::Util.url_encode(video['file']) %>" class="hover:text-red-500 transition-colors">
+              <a href="/watch?v=<%= video['slug'] %>" class="hover:text-red-500 transition-colors">
                 <%= video['cleanTitle'] || video['title'] %>
               </a>
             </h3>
@@ -2050,7 +2154,7 @@ __END__
       // Mobile menu toggle
       const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
       const mobileMenu = document.getElementById('mobile-menu');
-      
+
       if (mobileMenuToggle && mobileMenu) {
         mobileMenuToggle.addEventListener('click', function() {
           mobileMenu.classList.toggle('hidden');
