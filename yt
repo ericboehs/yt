@@ -815,8 +815,7 @@ __END__
         </div>
       </div>
       <div class="flex items-center space-x-3">
-        <div class="flex items-center space-x-2 flex-1">
-          <span class="text-sm text-gray-600 dark:text-gray-200">Sort:</span>
+        <div class="flex items-center flex-1">
           <div class="relative flex-1">
             <button type="button" class="sort-dropdown-trigger grid cursor-default grid-cols-1 rounded-md bg-white dark:bg-gray-800 py-3 pr-3 pl-3 text-left text-gray-900 dark:text-white outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500 text-sm w-full" data-dropdown="sort-mobile">
               <span class="col-start-1 row-start-1 truncate pr-4"><%= params[:sort] == 'recentlyPlayed' ? 'Played' : (params[:sort] == 'uploadDateEpoch' ? 'Created' : 'Downloaded') %></span>
@@ -861,8 +860,7 @@ __END__
           </button>
         </div>
 
-        <div class="flex items-center space-x-2 flex-1">
-          <span class="text-sm text-gray-600 dark:text-gray-200">Filter:</span>
+        <div class="flex items-center flex-1">
           <div class="relative flex-1">
             <button type="button" class="filter-dropdown-trigger grid cursor-default grid-cols-1 rounded-md bg-white dark:bg-gray-800 py-3 pr-3 pl-3 text-left text-gray-900 dark:text-white outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500 text-sm w-full" data-dropdown="filter-mobile">
               <span class="col-start-1 row-start-1 truncate pr-4"><%= params[:filter] == 'unwatched' ? 'Unwatched' : (params[:filter] == 'partial' ? 'Partial' : (params[:filter] == 'watched' ? 'Watched' : 'All')) %></span>
@@ -1599,12 +1597,39 @@ __END__
 <body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
   <!-- Header -->
   <header class="bg-gray-100 dark:bg-gray-900 py-4 px-6 border-b border-gray-200 dark:border-gray-700">
-    <div class="flex items-center justify-between">
+    <!-- Mobile Header -->
+    <div class="md:hidden flex items-center justify-between">
+      <h1 class="text-lg font-bold text-red-500">
+        <a href="/">Offline YouTube</a>
+      </h1>
+      <button id="mobile-menu-toggle" class="p-2 rounded-md text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 focus:outline-none">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Mobile Menu (hidden by default) -->
+    <div id="mobile-menu" class="md:hidden hidden mt-4 pb-4 border-t border-gray-200 dark:border-gray-700 pt-4">
+      <div class="space-y-4">
+        <a href="/channels" class="block text-gray-600 dark:text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition-colors">
+          Manage Channels
+        </a>
+        <a href="https://www.youtube.com" target="_blank" class="flex items-center space-x-2 text-red-500 hover:text-red-400">
+          <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+          </svg>
+          <span>Open YouTube</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Desktop Header -->
+    <div class="hidden md:flex items-center justify-between">
       <div class="flex items-center space-x-4">
         <h1 class="text-xl font-bold text-red-500">
           <a href="/">Offline YouTube</a>
         </h1>
-        <span class="text-sm text-gray-600 dark:text-gray-300">Video Player</span>
       </div>
 
       <!-- Search Bar -->
@@ -1881,6 +1906,28 @@ __END__
                 theaterToggleBtn.click();
               }
               break;
+            case 'f':
+            case 'F':
+              e.preventDefault();
+              // Toggle fullscreen
+              if (!document.fullscreenElement) {
+                if (videoElement.requestFullscreen) {
+                  videoElement.requestFullscreen();
+                } else if (videoElement.webkitRequestFullscreen) {
+                  videoElement.webkitRequestFullscreen();
+                } else if (videoElement.msRequestFullscreen) {
+                  videoElement.msRequestFullscreen();
+                }
+              } else {
+                if (document.exitFullscreen) {
+                  document.exitFullscreen();
+                } else if (document.webkitExitFullscreen) {
+                  document.webkitExitFullscreen();
+                } else if (document.msExitFullscreen) {
+                  document.msExitFullscreen();
+                }
+              }
+              break;
           }
         }
       });
@@ -1999,6 +2046,16 @@ __END__
       showTheaterButton();
       // Always start in theater mode
       enableTheaterMode();
+
+      // Mobile menu toggle
+      const mobileMenuToggle = document.getElementById('mobile-menu-toggle');
+      const mobileMenu = document.getElementById('mobile-menu');
+      
+      if (mobileMenuToggle && mobileMenu) {
+        mobileMenuToggle.addEventListener('click', function() {
+          mobileMenu.classList.toggle('hidden');
+        });
+      }
 
       theaterToggle.addEventListener('click', function() {
         const isCurrentlyTheater = videoContainer.classList.contains('w-4/5');
