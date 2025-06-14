@@ -333,7 +333,7 @@ class DownieJSON
   def upload_date_epoch
     date_string = raw_json['uploadDate'] || raw_json['prepareDate']
     return 0 unless date_string
-    
+
     date = Date.parse date_string
     date.to_time.to_i
   end
@@ -482,7 +482,9 @@ class YouTubeFiles
   end
 
   def json_files
-    Dir["#{DOWNLOAD_PATH}*.json"].reject { |file| file.end_with?('channel_cache.json') || file.end_with?('slug_cache.json') }
+    Dir["#{DOWNLOAD_PATH}*.json"].reject do |file|
+      file.end_with?('channel_cache.json') || file.end_with?('slug_cache.json')
+    end
   end
 end
 
@@ -837,6 +839,20 @@ __END__
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
+    .video-card.keyboard-selected {
+      outline: 2px solid #ef4444;
+      outline-offset: 2px;
+      box-shadow: 0 0 0 4px rgba(239, 68, 68, 0.2);
+      transform: translateY(-2px);
+      transition: all 0.2s ease;
+    }
+    .video-card.keyboard-selected:hover {
+      outline: 2px solid #dc2626;
+      box-shadow: 0 0 0 4px rgba(220, 38, 38, 0.3);
+    }
+    .video-card a.block:focus {
+      outline: none;
+    }
   </style>
 </head>
 <body class="bg-white text-gray-900 dark:bg-gray-900 dark:text-white transition-colors duration-200">
@@ -915,7 +931,7 @@ __END__
       <div class="flex items-center justify-between mb-2">
         <h2 class="text-base font-semibold text-gray-900 dark:text-white">Videos</h2>
         <div class="text-xs text-gray-500 dark:text-gray-200">
-          <span id="video-count"><%= videos&.json&.length || 0 %></span> videos
+          <span id="video-count-mobile"><%= videos&.json&.length || 0 %></span> videos
         </div>
       </div>
       <div class="flex items-center space-x-3">
@@ -954,7 +970,7 @@ __END__
               </li>
             </ul>
           </div>
-          <button id="sort-direction-mobile" class="sort-direction px-3 py-3 bg-white dark:bg-gray-800 outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors text-sm grid place-items-center" title="Toggle sort direction">
+          <button id="sort-direction-mobile" class="sort-direction px-3 py-3 bg-white dark:bg-gray-800 outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors text-sm grid place-items-center focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500" title="Toggle sort direction">
             <svg class="sort-asc w-3 h-3 text-gray-500 dark:text-gray-200 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
             </svg>
@@ -1102,7 +1118,7 @@ __END__
                 </li>
               </ul>
             </div>
-            <button id="sort-direction-desktop" class="sort-direction ml-2 px-3 py-1.5 bg-white dark:bg-gray-800 outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors text-sm grid place-items-center" title="Toggle sort direction">
+            <button id="sort-direction-desktop" class="sort-direction ml-2 px-3 py-1.5 bg-white dark:bg-gray-800 outline-1 -outline-offset-1 outline-gray-300 dark:outline-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700 rounded-md transition-colors text-sm grid place-items-center focus:outline-2 focus:-outline-offset-2 focus:outline-blue-500" title="Toggle sort direction">
               <svg class="sort-asc w-4 h-4 text-gray-500 dark:text-gray-400 <%= 'hidden' if params[:dir] == 'asc' %>" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"/>
               </svg>
@@ -1113,7 +1129,7 @@ __END__
           </div>
         </div>
       <div class="text-sm text-gray-500 dark:text-gray-400">
-        Showing <span id="video-count"><%= videos&.json&.length || 0 %></span> videos
+        Showing <span id="video-count-desktop"><%= videos&.json&.length || 0 %></span> videos
       </div>
     </div>
   </div>
@@ -1234,13 +1250,15 @@ __END__
     function handleSearch(e) {
       const query = e.target.value.toLowerCase().trim();
       const youtubeCardText = document.getElementById('youtube-card-text');
-      const videoCountEl = document.getElementById('video-count');
+      const videoCountDesktop = document.getElementById('video-count-desktop');
+      const videoCountMobile = document.getElementById('video-count-mobile');
 
       if (!query) {
         // Show all videos when search is empty
         videoCards.forEach(card => card.style.display = 'block');
         youtubeSearchCard.classList.add('hidden');
-        videoCountEl.textContent = videoCards.length;
+        videoCountDesktop.textContent = videoCards.length;
+        videoCountMobile.textContent = videoCards.length;
         return;
       }
 
@@ -1257,7 +1275,8 @@ __END__
       });
 
       // Update video count
-      videoCountEl.textContent = visibleCount;
+      videoCountDesktop.textContent = visibleCount;
+      videoCountMobile.textContent = visibleCount;
 
       // Show YouTube search card and update link
       youtubeSearchCard.classList.remove('hidden');
@@ -1280,6 +1299,337 @@ __END__
     // Add event listeners to both search inputs
     searchInput.addEventListener('input', handleSearch);
     searchInputMobile.addEventListener('input', handleSearch);
+
+    // Add Enter key listeners to focus first video
+    searchInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        focusFirstVideo();
+      }
+    });
+
+    searchInputMobile.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        focusFirstVideo();
+      }
+    });
+
+    // Keyboard navigation for video grid using browser focus
+    let gridColumns = 1;
+
+    function getVisibleVideoCards() {
+      const visibleCards = Array.from(videoCards).filter(card => {
+        // Check both hidden class and display style (for search filtering)
+        return !card.classList.contains('hidden') &&
+              window.getComputedStyle(card).display !== 'none';
+      });
+
+      const youtubeCard = document.getElementById('youtube-search-card');
+
+      // Add YouTube search card if visible
+      if (youtubeCard && !youtubeCard.classList.contains('hidden')) {
+        visibleCards.push(youtubeCard);
+      }
+
+      return visibleCards;
+    }
+
+    function getFirstFocusableElementInCard(card) {
+      const selector = 'a[href], button:not([disabled])';
+      const focusableElements = card.querySelectorAll(selector);
+      return focusableElements.length > 0 ? focusableElements[0] : null;
+    }
+
+    function updateGridColumns() {
+      const gridContainer = document.getElementById('video-grid');
+      const computedStyle = window.getComputedStyle(gridContainer);
+      const columns = computedStyle.getPropertyValue('grid-template-columns').split(' ').length;
+      gridColumns = columns;
+    }
+
+    function getCardGridPosition(card) {
+      const visibleCards = getVisibleVideoCards();
+      const cardIndex = visibleCards.indexOf(card);
+      return {
+        row: Math.floor(cardIndex / gridColumns),
+        col: cardIndex % gridColumns
+      };
+    }
+
+    function getCurrentCard() {
+      const activeElement = document.activeElement;
+      if (!activeElement) return null;
+      return activeElement.closest('.video-card');
+    }
+
+    function updateCardHighlight(targetCard) {
+      // Remove previous selection
+      document.querySelectorAll('.video-card.keyboard-selected').forEach(card => {
+        card.classList.remove('keyboard-selected');
+      });
+
+      // Add selection to target card
+      if (targetCard) {
+        targetCard.classList.add('keyboard-selected');
+      }
+    }
+
+    function focusFirstVideo() {
+      const visibleCards = getVisibleVideoCards();
+      if (visibleCards.length > 0) {
+        const firstElement = getFirstFocusableElementInCard(visibleCards[0]);
+        if (firstElement) {
+          firstElement.focus();
+          updateCardHighlight(visibleCards[0]);
+        }
+      }
+    }
+
+    function navigateGrid(direction) {
+      let currentCard = getCurrentCard();
+      const visibleCards = getVisibleVideoCards();
+
+      if (visibleCards.length === 0) return;
+
+      let targetCard = null;
+      let currentIndex = currentCard ? visibleCards.indexOf(currentCard) : -1;
+      
+      // If we lost focus (currentCard is null or not found), try to find the highlighted card
+      if (currentIndex < 0) {
+        const highlightedCard = document.querySelector('.video-card.keyboard-selected');
+        if (highlightedCard && visibleCards.includes(highlightedCard)) {
+          currentIndex = visibleCards.indexOf(highlightedCard);
+          currentCard = highlightedCard;
+        }
+      }
+      
+      // If still no valid position, start from first card
+      if (currentIndex < 0) {
+        currentIndex = 0;
+        currentCard = visibleCards[0];
+      }
+
+      switch(direction) {
+        case 'right':
+        case 'l':
+          if (currentIndex >= 0 && currentIndex < visibleCards.length - 1) {
+            targetCard = visibleCards[currentIndex + 1];
+          } else if (currentIndex < 0) {
+            targetCard = visibleCards[0];
+          }
+          // If at last card, don't move
+          break;
+        case 'left':
+        case 'h':
+          if (currentIndex > 0) {
+            targetCard = visibleCards[currentIndex - 1];
+          } else if (currentIndex < 0) {
+            targetCard = visibleCards[0];
+          }
+          // If at first card, don't move
+          break;
+        case 'down':
+        case 'j':
+          const currentPos = getCardGridPosition(currentCard);
+          const targetRow = currentPos.row + 1;
+          const targetCol = currentPos.col;
+          const targetIndex = (targetRow * gridColumns) + targetCol;
+
+          if (targetIndex < visibleCards.length) {
+            targetCard = visibleCards[targetIndex];
+          } else {
+            // If target position doesn't exist, try last card in that row
+            const lastInRow = Math.min((targetRow * gridColumns) + (gridColumns - 1), visibleCards.length - 1);
+            if (lastInRow > currentIndex) {
+              targetCard = visibleCards[lastInRow];
+            }
+          }
+          break;
+        case 'up':
+        case 'k':
+          const currentPosUp = getCardGridPosition(currentCard);
+          const targetRowUp = currentPosUp.row - 1;
+
+          if (targetRowUp >= 0) {
+            const targetCol = currentPosUp.col;
+            const targetIndex = (targetRowUp * gridColumns) + targetCol;
+
+            if (targetIndex >= 0 && targetIndex < visibleCards.length) {
+              targetCard = visibleCards[targetIndex];
+            } else {
+              // If target position doesn't exist, try last card in that row
+              const lastInRow = Math.min((targetRowUp * gridColumns) + (gridColumns - 1), visibleCards.length - 1);
+              if (lastInRow >= 0) {
+                targetCard = visibleCards[lastInRow];
+              }
+            }
+          }
+          break;
+      }
+
+      if (targetCard) {
+        const firstElement = getFirstFocusableElementInCard(targetCard);
+        if (firstElement) {
+          firstElement.focus();
+          updateCardHighlight(targetCard);
+
+          // Scroll into view
+          firstElement.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+            inline: 'nearest'
+          });
+        }
+      } else if (currentIndex < 0 && visibleCards.length > 0) {
+        // If we couldn't find a target and have no current position, focus first video
+        focusFirstVideo();
+      }
+    }
+
+
+    // Helper functions for keyboard shortcuts
+    function clickButtonInCurrentCard(selector) {
+      const currentCard = getCurrentCard();
+      if (currentCard) {
+        const button = currentCard.querySelector(selector);
+        if (button) {
+          button.click();
+        }
+      }
+    }
+
+    function clickLinkInCurrentCard(selector) {
+      const currentCard = getCurrentCard();
+      if (currentCard) {
+        const link = currentCard.querySelector(selector);
+        if (link) {
+          link.click();
+        }
+      }
+    }
+
+    // Global keyboard event listener
+    document.addEventListener('keydown', function(e) {
+      // Skip if user is typing in an input field
+      const activeElement = document.activeElement;
+      if (activeElement && (
+        activeElement.tagName === 'INPUT' ||
+        activeElement.tagName === 'TEXTAREA' ||
+        activeElement.contentEditable === 'true'
+      )) {
+        return;
+      }
+
+      switch(e.key.toLowerCase()) {
+        case 'h':
+        case 'arrowleft':
+          e.preventDefault();
+          navigateGrid('h');
+          break;
+        case 'j':
+        case 'arrowdown':
+          e.preventDefault();
+          navigateGrid('j');
+          break;
+        case 'k':
+        case 'arrowup':
+          e.preventDefault();
+          navigateGrid('k');
+          break;
+        case 'l':
+        case 'arrowright':
+          e.preventDefault();
+          navigateGrid('l');
+          break;
+        case 'escape':
+          // Clear search and focus first video
+          e.preventDefault();
+          searchInput.value = '';
+          searchInputMobile.value = '';
+          handleSearch({ target: searchInput });
+          focusFirstVideo();
+          break;
+        case '/':
+          // Focus search input
+          e.preventDefault();
+          const isMobile = window.innerWidth < 768;
+          if (isMobile) {
+            searchInputMobile.focus();
+          } else {
+            searchInput.focus();
+          }
+          break;
+        case 'i':
+          // Open in IINA
+          e.preventDefault();
+          clickButtonInCurrentCard('.iina-play-btn');
+          break;
+        case 'c':
+          // Open channel
+          e.preventDefault();
+          clickLinkInCurrentCard('a[href*="youtube.com"]');
+          break;
+        case 'w':
+          // Mark watched
+          e.preventDefault();
+          clickButtonInCurrentCard('.mark-watched-btn');
+          break;
+        case 'd':
+          // Delete video
+          e.preventDefault();
+          clickButtonInCurrentCard('.delete-btn');
+          break;
+        case 'Y':
+          // Open youtube.com
+          e.preventDefault();
+          if (e.shiftKey) {
+            // Open in new tab
+            window.open('https://www.youtube.com', '_blank');
+          } else {
+            const youtubeLink = document.querySelector('a[href="https://www.youtube.com"]');
+            if (youtubeLink) {
+              youtubeLink.click();
+            }
+          }
+          break;
+      }
+    });
+
+    // Focus first video on page load
+    window.addEventListener('load', function() {
+      updateGridColumns();
+      focusFirstVideo();
+    });
+
+    // Update grid columns on resize
+    window.addEventListener('resize', function() {
+      updateGridColumns();
+    });
+
+    // Focus first video after search
+    const originalHandleSearch = handleSearch;
+    handleSearch = function(e) {
+      originalHandleSearch(e);
+      // Small delay to ensure DOM updates are complete
+      setTimeout(() => {
+        updateGridColumns();
+        focusFirstVideo();
+      }, 10);
+    };
+
+    // Maintain card highlighting only when thumbnail link is focused
+    document.addEventListener('focusin', function(e) {
+      const focusedCard = e.target.closest('.video-card');
+
+      // Only highlight card if focus is on the thumbnail link (a.block)
+      if (focusedCard && e.target.matches('a.block')) {
+        updateCardHighlight(focusedCard);
+      } else {
+        // Clear highlighting when focus moves to other elements
+        updateCardHighlight(null);
+      }
+    });
 
     // Convert timestamps to relative time
     function timeAgo(timestamp) {
@@ -1437,6 +1787,29 @@ __END__
       button.addEventListener('click', function() {
         const filePath = decodeURIComponent(this.getAttribute('data-file'));
         const videoCard = this.closest('.video-card');
+        
+        // Get video title for confirmation
+        const titleElement = videoCard.querySelector('h3');
+        const videoTitle = titleElement ? titleElement.textContent.trim() : 'this video';
+        
+        // Show confirmation dialog
+        if (!confirm(`Are you sure you want to delete "${videoTitle}"? This action cannot be undone.`)) {
+          return;
+        }
+        
+        // Find the next logical focus target before deletion
+        const visibleCards = getVisibleVideoCards();
+        const currentIndex = visibleCards.indexOf(videoCard);
+        let nextFocusCard = null;
+        
+        if (currentIndex >= 0) {
+          // Try next card first, then previous if no next
+          if (currentIndex < visibleCards.length - 1) {
+            nextFocusCard = visibleCards[currentIndex + 1];
+          } else if (currentIndex > 0) {
+            nextFocusCard = visibleCards[currentIndex - 1];
+          }
+        }
 
         fetch('/video', {
           method: 'DELETE',
@@ -1454,6 +1827,23 @@ __END__
             }
             // Remove the video card from the UI
             videoCard.remove();
+            
+            // Move focus to next logical card
+            if (nextFocusCard) {
+              const firstElement = getFirstFocusableElementInCard(nextFocusCard);
+              if (firstElement) {
+                firstElement.focus();
+                updateCardHighlight(nextFocusCard);
+              }
+            } else {
+              // No cards left, focus the search input
+              const isMobile = window.innerWidth < 768;
+              if (isMobile) {
+                searchInputMobile.focus();
+              } else {
+                searchInput.focus();
+              }
+            }
           } else {
             alert('Error deleting video: ' + data.error);
           }
@@ -2029,6 +2419,67 @@ __END__
                   document.webkitExitFullscreen();
                 } else if (document.msExitFullscreen) {
                   document.msExitFullscreen();
+                }
+              }
+              break;
+            case '/':
+              e.preventDefault();
+              // Focus search input
+              const searchInput = document.getElementById('show-search-input');
+              if (searchInput) {
+                searchInput.focus();
+              }
+              break;
+            case 'i':
+              e.preventDefault();
+              // Open in IINA
+              const iinaBtn = document.querySelector('.iina-play-btn');
+              if (iinaBtn) {
+                iinaBtn.click();
+              }
+              break;
+            case 'c':
+              e.preventDefault();
+              // Open channel
+              const channelLink = document.querySelector('a[href*="youtube.com"]:not([href*="watch"])');
+              if (channelLink) {
+                channelLink.click();
+              }
+              break;
+            case 'w':
+              e.preventDefault();
+              // Mark watched
+              const watchedBtn = document.querySelector('.mark-watched-btn');
+              if (watchedBtn) {
+                watchedBtn.click();
+              }
+              break;
+            case 'd':
+              e.preventDefault();
+              // Delete video
+              const deleteBtn = document.querySelector('.delete-btn');
+              if (deleteBtn) {
+                deleteBtn.click();
+              }
+              break;
+            case 'y':
+              e.preventDefault();
+              // Open in YouTube
+              const videoUrl = '<%= @video["url"] %>';
+              if (videoUrl) {
+                window.open(videoUrl, '_blank');
+              }
+              break;
+            case 'Y':
+              e.preventDefault();
+              // Open youtube.com
+              if (e.shiftKey) {
+                // Open in new tab
+                window.open('https://www.youtube.com', '_blank');
+              } else {
+                const youtubeLink = document.querySelector('a[href="https://www.youtube.com"]');
+                if (youtubeLink) {
+                  youtubeLink.click();
                 }
               }
               break;
