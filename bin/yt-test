@@ -620,9 +620,13 @@ class DownieJSONErrorTest < Minitest::Test
     invalid_json_path = "#{@temp_dir}/invalid.json"
     File.write(invalid_json_path, 'invalid json content')
 
-    assert_raises(JSON::ParserError) do
-      DownieJSON.new(invalid_json_path)
-    end
+    # Should not raise an error and initialize object successfully
+    downie_json = DownieJSON.new(invalid_json_path)
+
+    # After initialization, the file should be updated with default values
+    updated_json = downie_json.send(:raw_json)
+    assert_kind_of Hash, updated_json
+    assert_equal invalid_json_path, updated_json['file']
   end
 
   def test_channel_cache_handles_missing_file

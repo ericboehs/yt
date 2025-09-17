@@ -282,6 +282,9 @@ class DownieJSON
 
   def raw_json
     JSON.parse file_contents
+  rescue JSON::ParserError => e
+    puts "Warning: Invalid JSON in file #{file}: #{e.message}"
+    {}
   end
 
   def offline_url
@@ -1394,7 +1397,7 @@ __END__
 
       let targetCard = null;
       let currentIndex = currentCard ? visibleCards.indexOf(currentCard) : -1;
-      
+
       // If we lost focus (currentCard is null or not found), try to find the highlighted card
       if (currentIndex < 0) {
         const highlightedCard = document.querySelector('.video-card.keyboard-selected');
@@ -1403,7 +1406,7 @@ __END__
           currentCard = highlightedCard;
         }
       }
-      
+
       // If still no valid position, start from first card
       if (currentIndex < 0) {
         currentIndex = 0;
@@ -1787,21 +1790,21 @@ __END__
       button.addEventListener('click', function() {
         const filePath = decodeURIComponent(this.getAttribute('data-file'));
         const videoCard = this.closest('.video-card');
-        
+
         // Get video title for confirmation
         const titleElement = videoCard.querySelector('h3');
         const videoTitle = titleElement ? titleElement.textContent.trim() : 'this video';
-        
+
         // Show confirmation dialog
         if (!confirm(`Are you sure you want to delete "${videoTitle}"? This action cannot be undone.`)) {
           return;
         }
-        
+
         // Find the next logical focus target before deletion
         const visibleCards = getVisibleVideoCards();
         const currentIndex = visibleCards.indexOf(videoCard);
         let nextFocusCard = null;
-        
+
         if (currentIndex >= 0) {
           // Try next card first, then previous if no next
           if (currentIndex < visibleCards.length - 1) {
@@ -1827,7 +1830,7 @@ __END__
             }
             // Remove the video card from the UI
             videoCard.remove();
-            
+
             // Move focus to next logical card
             if (nextFocusCard) {
               const firstElement = getFirstFocusableElementInCard(nextFocusCard);
@@ -2207,7 +2210,7 @@ __END__
         Play in IINA
       </button>
 
-      <a href="<%= @video['url'] %>" target="_blank"
+      <a id="youtube-link" href="<%= @video['url'] %>" target="_blank"
         class="flex items-center px-4 py-2 bg-red-600 hover:bg-red-700 dark:bg-red-700 dark:hover:bg-red-600 text-white rounded-lg transition-colors">
         <svg class="w-5 h-5 mr-2" fill="currentColor" viewBox="0 0 24 24">
           <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
@@ -2351,6 +2354,17 @@ __END__
     // Set video start time on load
     if (videoElement) {
       const startTime = parseInt(videoElement.getAttribute('data-start-time')) || 0;
+      const baseYouTubeURL = '<%= @video['url'] %>';
+      const youtubeLink = document.getElementById('youtube-link');
+
+      // Function to update YouTube link with current timestamp
+      function updateYouTubeLink() {
+        if (videoElement && youtubeLink) {
+          const currentSeconds = Math.floor(videoElement.currentTime);
+          const urlWithTimestamp = baseYouTubeURL + (baseYouTubeURL.includes('?') ? '&' : '?') + 't=' + currentSeconds + 's';
+          youtubeLink.href = urlWithTimestamp;
+        }
+      }
 
       videoElement.addEventListener('loadedmetadata', function() {
         if (startTime > 0) {
@@ -2358,7 +2372,12 @@ __END__
         }
         // Unmute after setting start time to allow autoplay
         videoElement.muted = false;
+        // Update YouTube link when video loads
+        updateYouTubeLink();
       });
+
+      // Update YouTube link during playback
+      videoElement.addEventListener('timeupdate', updateYouTubeLink);
     }
 
     // Add keyboard controls for video player
@@ -2398,6 +2417,15 @@ __END__
               const theaterToggleBtn = document.getElementById('theater-toggle');
               if (theaterToggleBtn) {
                 theaterToggleBtn.click();
+              }
+              break;
+            case 'y':
+            case 'Y':
+              e.preventDefault();
+              // Open YouTube link with current timestamp
+              const youtubeLink = document.getElementById('youtube-link');
+              if (youtubeLink) {
+                window.open(youtubeLink.href, '_blank');
               }
               break;
             case 'f':
@@ -2613,7 +2641,7 @@ __END__
       }
 
       theaterToggle.addEventListener('click', function() {
-        const isCurrentlyTheater = videoContainer.classList.contains('w-4/5');
+        const isCurrentlyTheater = videoContainer.classList.contains('w-[95%]');
 
         if (isCurrentlyTheater) {
           disableTheaterMode();
@@ -2626,7 +2654,7 @@ __END__
         // Temporarily disable transitions for smooth theater mode change
         videoContainer.style.transition = 'none';
         videoContainer.classList.remove('w-full', 'max-w-5xl');
-        videoContainer.classList.add('w-4/5');
+        videoContainer.classList.add('w-[95%]');
         theaterIcon.classList.add('hidden');
         normalIcon.classList.remove('hidden');
         localStorage.setItem('theaterMode', 'true');
@@ -2639,7 +2667,7 @@ __END__
       function disableTheaterMode() {
         // Temporarily disable transitions for smooth theater mode change
         videoContainer.style.transition = 'none';
-        videoContainer.classList.remove('w-4/5');
+        videoContainer.classList.remove('w-[95%]');
         videoContainer.classList.add('w-full', 'max-w-5xl');
         theaterIcon.classList.remove('hidden');
         normalIcon.classList.add('hidden');
