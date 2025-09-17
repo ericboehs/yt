@@ -2154,7 +2154,7 @@ __END__
   </header>
 
   <!-- Video Player Section -->
-  <div id="video-container" class="w-full max-w-5xl mx-auto px-6 pt-4 pb-2 mb-4 transition-all duration-300">
+  <div id="video-container" class="w-full max-w-5xl mx-auto px-6 pt-4 pb-4 mb-4 transition-all duration-300">
     <div class="relative">
       <!-- Theater Mode Toggle -->
       <button id="theater-toggle" class="absolute top-2 right-2 z-10 flex items-center justify-center w-8 h-8 bg-black bg-opacity-30 hover:bg-opacity-60 text-white rounded-lg transition-all duration-300 opacity-100" title="Toggle theater mode (T)">
@@ -2678,6 +2678,14 @@ __END__
         }, 50);
       }
     }
+
+    // Auto-scroll to video player on page load
+    window.addEventListener('load', function() {
+      const videoContainer = document.getElementById('video-container');
+      if (videoContainer) {
+        videoContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    });
 
     // IINA progress sync functionality
     const currentFilePath = '<%= ERB::Util.url_encode(@video["file"]) %>';
