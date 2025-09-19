@@ -2391,15 +2391,26 @@ __END__
           activeElement.contentEditable === 'true'
         );
 
-        if (!isInputFocused) {
+        // Check if any modifier keys are pressed
+        const hasModifier = e.ctrlKey || e.altKey || e.metaKey || e.shiftKey;
+
+        if (!isInputFocused && !hasModifier) {
           switch(e.key) {
             case 'ArrowLeft':
               e.preventDefault();
-              videoElement.currentTime = Math.max(0, videoElement.currentTime - 10);
+              videoElement.currentTime = Math.max(0, videoElement.currentTime - 5);
               break;
             case 'ArrowRight':
               e.preventDefault();
-              videoElement.currentTime = Math.min(videoElement.duration, videoElement.currentTime + 10);
+              videoElement.currentTime = Math.min(videoElement.duration, videoElement.currentTime + 5);
+              break;
+            case 'ArrowUp':
+              e.preventDefault();
+              videoElement.volume = Math.min(1, videoElement.volume + 0.1);
+              break;
+            case 'ArrowDown':
+              e.preventDefault();
+              videoElement.volume = Math.max(0, videoElement.volume - 0.1);
               break;
             case ' ':
             case 'k':
@@ -2662,6 +2673,8 @@ __END__
         setTimeout(() => {
           videoContainer.style.transition = '';
         }, 50);
+        // Scroll to video container when entering theater mode
+        videoContainer.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
 
       function disableTheaterMode() {
